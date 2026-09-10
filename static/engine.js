@@ -262,7 +262,7 @@ const Engine = (() => {
 
   /**
    * 在长度 n 的环上收集 isOn=true 的连续段（每段只回调一次）。
-   * isBroken 表示缺失点，缺失点两侧不合并；若整行存在缺失，则首尾不循环合并。
+   * isBroken 表示缺失点；任一格缺失则首尾不做循环合并。
    */
   function collectRuns(isOn, isBroken, n, cb) {
     let broken = false;
@@ -284,8 +284,9 @@ const Engine = (() => {
     if (!broken && runs.length >= 2) {
       const first = runs[0], last = runs[runs.length - 1];
       if (first[0] === 0 && last[0] + last[1] === n) {
+        // 跨循环边界合并：合并段沿环行进，起点就是尾段起点（如 n=3 时
+        // 首段 [0]、尾段 [2] 合并为长度 2 的段 [2,0]，起点为 2）。
         last[1] += first[1];
-        last[0] = (last[0] + n - first[1]) % n; // 起点移到合并段真实起点
         runs.shift();
       }
     }

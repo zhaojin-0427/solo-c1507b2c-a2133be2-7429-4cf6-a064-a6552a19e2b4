@@ -44,6 +44,8 @@ const state = {
   activeIssue: -1,
   flashUntil: 0,
 
+  compareB: null,         // 方案 B 缓存 {id,name,data}，编辑 A 时实时重算比较
+
   playing: false,
   stepHold: false,
   playPick: 0,
@@ -826,6 +828,9 @@ function writeBooleanMatrix(clip, r0, c0) {
 function mirrorSelection(axis) {
   const sel = state.selection;
   if (!sel) return;
+  // 锁定的区域不得被镜像改动（色带不属于穿综，不受穿综锁影响）
+  if (sel.grid === 'threading' && state.lockThreading) { toast('穿综已锁定：镜像未改动穿综数据'); return; }
+  if (sel.grid === 'tieup' && state.lockTieup) { toast('联结已锁定：镜像未改对联结数据'); return; }
   const clip = selectedBooleanMatrix();
   const m = clip.matrix;
   const out = m.map(row => row.slice());
@@ -884,6 +889,7 @@ function afterEdit() {
   refreshIssues();
   refreshStats();
   refreshPreviews();
+  refreshCompareIfActive();
   scheduleAutosave();
 }
 
@@ -896,6 +902,7 @@ function afterStructural() {
   refreshStats();
   refreshPreviews();
   refreshTreadleBrush();
+  refreshCompareIfActive();
   scheduleAutosave();
 }
 
@@ -933,6 +940,9 @@ function loadDraft(d, name, id) {
   state.clipboard = null;
   state.lockThreading = $('#lockThreading').checked = false;
   state.lockTieup = $('#lockTieup').checked = false;
+  state.compareB = null;
+  $('#cmpSource').value = '';
+  $('#cmpResult').innerHTML = '<p class="hint">将当前草稿与已保存方案并排比较。</p>';
   afterStructural();
 }
 
@@ -1228,17 +1238,40 @@ async function refreshCompareOptions() {
 async function runCompare() {
   const id = $('#cmpSource').value;
   const box = $('#cmpResult');
-  if (!id) { box.innerHTML = '<p class="hint">将当前草稿与已保存方案并排比较。</p>'; return; }
+  if (!id) { state.compareB = null; box.innerHTML = '<p class="hint">将当前草稿与已保存方案并排比较。</p>'; return; }
   let saved;
   try { saved = await api('GET', `/api/drafts/${id}`); }
   catch { box.innerHTML = '<p class="hint">无法读取该草稿。</p>'; return; }
-  const r = Engine.compare(state.draft, saved.data);
+  // 缓存方案 B：编辑当前方案后无需重新请求即可重算比较
+  state.compareB = { id: saved.id, name: saved.name, data: saved.data };
+  if (String($('#cmpSource').value) === String(saved.id)) renderCompare();
+}
+
+/** 当前方案被修改后，若比较面板已选方案 B，则基于缓存实时重算（轻量防抖）。 */
+function refreshCompareIfActive() {
+  if (!state.compareB) return;
+  clearTimeout(refreshCompareIfActive._t);
+  refreshCompareIfActive._t = setTimeout(() => {
+    if (state.compareB &&
+        String($('#cmpSource').value) === String(state.compareB.id)) {
+      renderCompare();
+    }
+  }, 150);
+}
+
+function renderCompare() {
+  const b = state.compareB;
+  const box = $('#cmpResult');
+  if (!b) { box.innerHTML = '<p class="hint">将当前草稿与已保存方案并排比较。</p>'; return; }
+  // 比较选择器已切换到别的草稿时不覆盖
+  if (String($('#cmpSource').value) !== String(b.id)) return;
+  const r = Engine.compare(state.draft, b.data);
   const same = r.diffs === 0 &&
     r.repeatA.warp === r.repeatB.warp && r.repeatA.weft === r.repeatB.weft &&
     r.floatA.warp === r.floatB.warp && r.floatA.weft === r.floatB.weft;
   box.innerHTML = `
     <table>
-      <tr><th></th><th>A 当前</th><th>B ${saved.name}</th></tr>
+      <tr><th></th><th>A 当前</th><th>B ${b.name}</th></tr>
       <tr><td>循环（经×纬）</td><td>${r.repeatA.warp}×${r.repeatA.weft}</td><td>${r.repeatB.warp}×${r.repeatB.weft}</td></tr>
       <tr><td>最长经浮</td><td>${r.floatA.warp}</td><td>${r.floatB.warp}</td></tr>
       <tr><td>最长纬浮</td><td>${r.floatA.weft}</td><td>${r.floatB.weft}</td></tr>
@@ -1270,7 +1303,8 @@ function drawDiffCanvas(cvs, r, side) {
       if (diff) o.fillStyle = '#e0352a';
       else if (v === null) o.fillStyle = '#ddd';
       else {
-        const warpUp = side === 'A' ? v === 1 : v === 0;
+        // A、B 均按「正面」采样：值 1 恒为经在上。两侧须一致，B 不能取反。
+        const warpUp = v === 1;
         const idx = warpUp ? d.warpColor[e % d.warpColor.length] : d.weftColor[p % d.weftColor.length];
         o.fillStyle = (d.palette[idx] || { hex: '#888' }).hex;
       }
