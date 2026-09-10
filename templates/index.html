@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>手织组织图校验台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- ============================= 顶栏 ============================= -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">▦</span>
+      <span class="brand-name">手织组织图校验台</span>
+    </div>
+    <input id="draftName" class="draft-name" type="text" value="未命名草稿"
+           maxlength="80" spellcheck="false" />
+    <div class="top-actions">
+      <button id="btnUndo" class="btn" title="撤销 Ctrl+Z">↶ 撤销</button>
+      <button id="btnRedo" class="btn" title="重做 Ctrl+Y">↷ 重做</button>
+      <button id="btnSave" class="btn btn-primary" title="保存到本地 SQLite (Ctrl+S)">💾 保存草稿</button>
+      <button id="btnOpen" class="btn" title="打开已保存草稿">📂 草稿箱</button>
+      <button id="btnPrint" class="btn" title="生成打印图 (Ctrl+P)">🖨 打印图</button>
+    </div>
+  </header>
+
+  <!-- ============================= 主体 ============================= -->
+  <div id="app" class="app">
+    <!-- 左侧控制面板 -->
+    <aside class="sidebar">
+      <section class="panel">
+        <h3>组织参数</h3>
+        <label class="field">
+          <span>综框数（1–24）</span>
+          <input id="numShafts" type="number" min="1" max="24" />
+        </label>
+        <label class="field">
+          <span>踏板数（1–24）</span>
+          <input id="numTreadles" type="number" min="1" max="24" />
+        </label>
+        <label class="field">
+          <span>经线数（1–200）</span>
+          <input id="numEnds" type="number" min="1" max="200" />
+        </label>
+        <label class="field">
+          <span>纬线数（1–200）</span>
+          <input id="numPicks" type="number" min="1" max="200" />
+        </label>
+        <label class="field">
+          <span>允许最长浮线</span>
+          <input id="maxFloat" type="number" min="1" max="200" />
+        </label>
+        <div class="lock-row">
+          <label class="check"><input id="lockThreading" type="checkbox" /> 锁定穿综</label>
+          <label class="check"><input id="lockTieup" type="checkbox" /> 锁定联结</label>
+        </div>
+        <div class="grid-2">
+          <button id="btnApply" class="btn btn-primary">应用尺寸</button>
+          <button id="btnNew" class="btn">新建空白</button>
+        </div>
+        <div class="templates">
+          <button class="btn tiny" data-tpl="plain">平纹</button>
+          <button class="btn tiny" data-tpl="twill">2/2 斜纹</button>
+          <button class="btn tiny" data-tpl="basket">方平</button>
+          <button class="btn tiny" data-tpl="satin">五枚缎</button>
+          <button class="btn tiny" data-tpl="clear">清空</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>编辑工具</h3>
+        <div class="tool-row" id="toolRow">
+          <button class="btn tool active" data-tool="paint">✏ 涂绘</button>
+          <button class="btn tool" data-tool="select">▭ 框选</button>
+          <button class="btn tool" data-tool="pan">✋ 平移</button>
+        </div>
+        <div class="zoom-row">
+          <button id="zoomOut" class="btn tiny">−</button>
+          <span id="zoomLabel">100%</span>
+          <button id="zoomIn" class="btn tiny">+</button>
+          <button id="zoomFit" class="btn tiny">适配</button>
+        </div>
+        <div class="sel-actions">
+          <button id="btnCopy" class="btn tiny" disabled>复制</button>
+          <button id="btnPaste" class="btn tiny" disabled>粘贴</button>
+          <button id="btnMirrorH" class="btn tiny" disabled>左右镜像</button>
+          <button id="btnMirrorV" class="btn tiny" disabled>上下镜像</button>
+          <button id="btnClearSel" class="btn tiny" disabled>清除选区</button>
+        </div>
+        <p class="hint" id="brushHint">穿综：在列内点选综框行；联结：点格切换；踩踏：选踏板后点行。</p>
+        <div id="treadleBrush" class="brush-row"></div>
+      </section>
+
+      <section class="panel">
+        <h3>色纱</h3>
+        <div id="palette" class="palette"></div>
+        <div class="grid-2">
+          <button id="btnApplyWarp" class="btn tiny">色号→经线带</button>
+          <button id="btnApplyWeft" class="btn tiny">色号→纬线带</button>
+        </div>
+        <p class="hint">先点选色号，再在经/纬色带单元格上涂绘；或用整带按钮。</p>
+      </section>
+
+      <section class="panel">
+        <h3>逐纬播放</h3>
+        <div class="grid-3">
+          <button id="btnPlay" class="btn tiny">▶ 播放</button>
+          <button id="btnStepBack" class="btn tiny">‹</button>
+          <button id="btnStepFwd" class="btn tiny">›</button>
+        </div>
+        <label class="field"><span>速度（纬/秒）</span>
+          <input id="playSpeed" type="range" min="1" max="10" value="3" /></label>
+        <p class="hint" id="playInfo">未播放</p>
+      </section>
+
+      <section class="panel">
+        <h3>校验问题 <span id="issueCount" class="badge">0</span></h3>
+        <ul id="issueList" class="issues"></ul>
+      </section>
+
+      <section class="panel">
+        <h3>方案比较</h3>
+        <label class="field"><span>方案 B 来源</span>
+          <select id="cmpSource"></select></label>
+        <div id="cmpResult" class="compare-result">
+          <p class="hint">将当前草稿与已保存方案并排比较。</p>
+        </div>
+      </section>
+    </aside>
+
+    <!-- 中部图板 -->
+    <main class="stage-wrap">
+      <div id="viewport" class="viewport">
+        <div id="board" class="board">
+          <!-- 图层 canvas 由 JS 生成 -->
+        </div>
+      </div>
+
+      <!-- 底部统计 + 正反面预览 -->
+      <div class="bottombar">
+        <div class="stat-box">
+          <div class="stat-title">循环与浮线</div>
+          <div id="statText" class="stat-text">—</div>
+        </div>
+        <div class="preview-box">
+          <div class="stat-title">正面</div>
+          <canvas id="frontPreview" width="180" height="110"></canvas>
+        </div>
+        <div class="preview-box">
+          <div class="stat-title">反面</div>
+          <canvas id="backPreview" width="180" height="110"></canvas>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ============================= 草稿箱 ============================= -->
+  <div id="draftModal" class="modal hidden">
+    <div class="modal-card wide">
+      <div class="modal-head">
+        <h2>草稿箱（SQLite）</h2>
+        <button class="btn close" data-close>&times;</button>
+      </div>
+      <table class="draft-table">
+        <thead><tr><th>名称</th><th>更新时间</th><th style="width:210px">操作</th></tr></thead>
+        <tbody id="draftRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================= Toast ============================= -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- ============================= 打印区（屏幕隐藏） ============================= -->
+  <section id="printSheet" class="print-sheet">
+    <h1 id="printTitle"></h1>
+    <div id="printMeta" class="print-meta"></div>
+    <canvas id="printCanvas"></canvas>
+    <h2 class="print-h2">穿综 · 联结 · 踩踏 · 色纱编号</h2>
+    <div id="printLegend" class="print-legend"></div>
+  </section>
+
+  <script src="/static/engine.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
