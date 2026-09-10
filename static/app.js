@@ -1699,4 +1699,9 @@ function init() {
 document.addEventListener('DOMContentLoaded', init);
 
 // 便于自动化测试 / 控制台调试
-if (typeof window !== 'undefined') window.__loom = { state, Engine };
+if (typeof window !== 'undefined') {
+  window.__loom = { state, Engine };
+  // 供「目标反推」模块调用：应用候选为不覆盖原稿的新草稿
+  window.loadDraft = loadDraft;
+  window.toast = toast;
+}

@@ -20,6 +20,7 @@
       <button id="btnRedo" class="btn" title="重做 Ctrl+Y">↷ 重做</button>
       <button id="btnSave" class="btn btn-primary" title="保存到本地 SQLite (Ctrl+S)">💾 保存草稿</button>
       <button id="btnOpen" class="btn" title="打开已保存草稿">📂 草稿箱</button>
+      <button id="btnReverse" class="btn" title="从目标组织反推穿综 / 联结 / 踩踏">🎯 目标反推</button>
       <button id="btnPrint" class="btn" title="生成打印图 (Ctrl+P)">🖨 打印图</button>
     </div>
   </header>
@@ -168,6 +169,76 @@
     </div>
   </div>
 
+  <!-- ============================= 目标组织反推 ============================= -->
+  <div id="reverseModal" class="modal hidden">
+    <div class="modal-card rev-card">
+      <div class="modal-head">
+        <h2>目标组织反推</h2>
+        <button class="btn close" data-close-rev>&times;</button>
+      </div>
+      <div class="rev-layout">
+        <!-- 左：目标绘制 -->
+        <div class="rev-col rev-col-left">
+          <div class="rev-sub">① 绘制目标循环（2–16 经 × 2–16 纬）</div>
+          <div class="rev-dims">
+            <label>经 <input id="revEnds" type="number" min="2" max="16" value="4" /></label>
+            <label>纬 <input id="revPicks" type="number" min="2" max="16" value="4" /></label>
+            <button id="revResize" class="btn tiny">应用</button>
+            <span class="rev-sep"></span>
+            <button id="revFromDraft" class="btn tiny" title="从当前草稿组织图循环对齐截取">取自当前稿</button>
+            <button id="revInvert" class="btn tiny">经纬反转</button>
+            <button id="revClear" class="btn tiny">全部不限</button>
+          </div>
+          <div class="rev-tools">
+            <button class="btn tiny rev-tool active" data-revtool="1">▰ 经线在上</button>
+            <button class="btn tiny rev-tool" data-revtool="0">▱ 纬线在上</button>
+            <button class="btn tiny rev-tool" data-revtool="-1">· 不限</button>
+            <span class="hint" id="revPaintHint">左键涂格，右键标“不限”。</span>
+          </div>
+          <div class="rev-board-wrap">
+            <canvas id="revCanvas"></canvas>
+            <canvas id="revOverlay"></canvas>
+          </div>
+          <div class="rev-legend">
+            <span><i class="sw sw-warp"></i>经线在上（目标）</span>
+            <span><i class="sw sw-weft"></i>纬线在上（目标）</span>
+            <span><i class="sw sw-any"></i>不限</span>
+            <span><i class="sw sw-conf"></i>冲突叠色</span>
+            <span><i class="sw sw-real"></i>“不限”格的实现</span>
+          </div>
+
+          <div class="rev-sub" style="margin-top:10px">② 反推条件</div>
+          <div class="rev-dims rev-cond">
+            <label>可用综框（2–8）<input id="revShafts" type="number" min="2" max="8" value="4" /></label>
+            <label>可用踏板（2–8）<input id="revTreadles" type="number" min="2" max="8" value="4" /></label>
+            <label>最长浮线<input id="revMaxFloat" type="number" min="1" max="32" value="3" /></label>
+          </div>
+          <div class="rev-locks">
+            <label class="check"><input id="revLockThreading" type="checkbox" /> 锁定当前穿综</label>
+            <label class="check"><input id="revLockTieup" type="checkbox" /> 锁定当前联结</label>
+            <label class="check"><input id="revLockTreadling" type="checkbox" /> 锁定当前踩踏</label>
+          </div>
+          <p class="hint" id="revLockHint">锁定后按目标尺寸与当前稿循环对齐（目标大于当前稿时按序列周期延伸）。</p>
+          <button id="revSearch" class="btn btn-primary rev-search">搜索候选草稿</button>
+          <div id="revStatus" class="rev-status hint"></div>
+        </div>
+
+        <!-- 右：候选列表 -->
+        <div class="rev-col rev-col-right">
+          <div class="rev-sub">③ 候选草稿（按匹配率 / 改动格数 / 占用综框 / 占用踏板排序）</div>
+          <div id="revCandidates" class="rev-cand-list">
+            <p class="hint">绘制目标并设置条件后点击“搜索候选草稿”。</p>
+          </div>
+          <div id="revExplain" class="rev-explain hidden"></div>
+          <div id="revSummary" class="rev-summary hidden"></div>
+          <div class="rev-actions">
+            <button id="revApply" class="btn btn-primary" disabled>应用为新草稿（不覆盖原稿）</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= Toast ============================= -->
   <div id="toast" class="toast hidden"></div>
 
@@ -181,6 +252,8 @@
   </section>
 
   <script src="/static/engine.js"></script>
+  <script src="/static/reverse.js"></script>
+  <script src="/static/reverse-ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
