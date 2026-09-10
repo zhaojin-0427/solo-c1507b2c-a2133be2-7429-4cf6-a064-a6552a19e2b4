@@ -59,7 +59,13 @@ w.eval(eng + rev + ui + app + `
   dpr = 1;
   syncInputs(); buildPalette(); refreshTreadleBrush();
   resizeCanvases(); refreshIssues(); refreshStats(); refreshPreviews();
-  globalThis.__setSatin = () => { state.draft = makeTemplate('satin'); afterStructural(); };
+  globalThis.__setSatin = () => {
+    // 五枚缎需要 5 综框；强制 10×10 尺寸，使 4 综框下确实无精确解
+    state.draft = makeTemplate('satin');
+    state.draft = Engine.resize(state.draft, { shafts: 5, treadles: 5, ends: 10, picks: 10 });
+    state.draft.maxFloat = 5;
+    afterStructural();
+  };
 `);
 
 const { Engine, Reverse } = w.F;
@@ -184,6 +190,65 @@ const { Engine, Reverse } = w.F;
 }
 
 /* ===================================================================== *
+ * 缺陷回归：maxFloat 必须真正参与搜索约束
+ * ===================================================================== */
+{
+  // 默认 2/2 斜纹：任何目标全满足的方案都有长度 2 的浮线
+  const tw = Engine.defaultDraft();
+  const tgt = Reverse.targetFromDraft(tw, 16, 16);
+  const r1 = Reverse.search(tgt, { base: tw, shafts: 4, treadles: 4, maxFloat: 1 });
+  check('[浮线] 斜纹 maxFloat=1：存在目标精确解', r1.exact);
+  check('[浮线] 斜纹 maxFloat=1：无合规精确解 compliantExact=false', r1.compliantExact === false);
+  check('[浮线] 首位候选不得 floatOK（不能列为符合条件的精确候选）',
+    r1.candidates[0].floatOK === false, { mw: r1.candidates[0].maxWarp, mf: r1.candidates[0].maxWeft });
+  check('[浮线] 首位确实超浮线（经浮或纬浮 > 1）',
+    r1.candidates[0].maxWarp > 1 || r1.candidates[0].maxWeft > 1);
+  check('[浮线] explain 给出超长浮线坐标',
+    Reverse.explain(r1.candidates[0], tgt).floatViolations.length > 0);
+  check('[浮线] floatNotes 有中文超限说明',
+    Reverse.floatNotes(Reverse.explain(r1.candidates[0], tgt)).length > 0);
+
+  // 放宽到 3：同样目标必须给出合规精确解并排在首位
+  const r3 = Reverse.search(tgt, { base: tw, shafts: 4, treadles: 4, maxFloat: 3 });
+  check('[浮线] 斜纹 maxFloat=3：存在合规精确解', r3.compliantExact === true);
+  check('[浮线] maxFloat=3 首位 floatOK', r3.candidates[0].floatOK);
+
+  // 平纹 maxFloat=1：合规精确
+  const pl = Engine.resize(Engine.blankDraft(2, 2, 8, 8),
+    { shafts: 2, treadles: 2, ends: 8, picks: 8 });
+  pl.threading = Array.from({ length: 8 }, (_, i) => i % 2);
+  pl.treadling = Array.from({ length: 8 }, (_, i) => i % 2);
+  pl.tieup = [[true, false], [false, true]];
+  pl.maxFloat = 1;
+  const rp = Reverse.search(Reverse.targetFromDraft(pl, 8, 8),
+    { base: Engine.blankDraft(4, 4, 16, 16), shafts: 2, treadles: 2, maxFloat: 1 });
+  check('[浮线] 平纹 maxFloat=1 合规精确',
+    rp.compliantExact && rp.candidates.every(c => c.floatOK));
+}
+
+/* ===================================================================== *
+ * 缺陷回归：目标网格画布尺寸 / 三态切换
+ * ===================================================================== */
+{
+  // 尺寸工具：2–16 范围与网格矩阵
+  const t = Reverse.resizeTarget(Reverse.makeTarget(2, 2), 16, 16);
+  check('[画布] resizeTarget 到 16×16', t.ends === 16 && t.picks === 16 &&
+    t.grid.length === 16 && t.grid[0].length === 16);
+  const t2 = Reverse.resizeTarget(Reverse.makeTarget(16, 16), 2, 2);
+  check('[画布] resizeTarget 到 2×2', t2.ends === 2 && t2.picks === 2);
+  // 三态值合法
+  check('[画布] 三态值仅为 1/0/-1',
+    t.grid.every(row => row.every(v => v === 1 || v === 0 || v === -1)));
+  // 反转保持三态
+  const inv = Reverse.invertTarget(Reverse.makeTarget(3, 3));
+  check('[画布] 经纬反转交换 0/1 且保留 -1',
+    inv.grid.every((row, p) => row.every((v, e) => {
+      const o = Reverse.makeTarget(3, 3).grid[p][e];
+      return v === -1 ? o === -1 : v === (o ? 0 : 1);
+    })));
+}
+
+/* ===================================================================== *
  * UI 层
  * ===================================================================== */
 // 打开模态，画布已建立
@@ -192,6 +257,28 @@ check('反推模态打开', !$('#reverseModal').classList.contains('hidden'));
 check('revCanvas 已创建', !!$('#revCanvas') && $('#revCanvas').width > 0);
 check('参数从当前稿同步（4/4）',
   $('#revShafts').value === '4' && $('#revTreadles').value === '4');
+
+// 缺陷回归 1：目标网格必须按实际尺寸显示（容器不得塌缩为 2×2）
+// 先在 4×4 上验证三态涂绘；16×16 容器尺寸检查放到“应用”流程之后，避免改变前置尺寸
+{
+  $('#revEnds').value = 4; $('#revPicks').value = 4; $('#revResize').click();
+  // 点击四角格子可稳定写入三态（jsdom 对 pointer capture 支持有限，用测试钩子直接驱动涂绘）
+  // 先切工具（验证工具按钮状态机）
+  $('.rev-tool[data-revtool="0"]').click();
+  check('[UI] 工具切到纬线在上', $('.rev-tool[data-revtool="0"]').classList.contains('active'));
+  w.__revAPI.paint(3, 3, 0);
+  check('[UI] (3,3) 标为纬线在上 0', w.__revAPI.cell(3, 3) === 0, w.__revAPI.cell(3, 3));
+  w.__revAPI.paint(3, 3, -1);
+  check('[UI] (3,3) 标为不限 -1', w.__revAPI.cell(3, 3) === -1, w.__revAPI.cell(3, 3));
+  $('.rev-tool[data-revtool="1"]').click();
+  w.__revAPI.paint(0, 0, 1);
+  check('[UI] (0,0) 标为经线在上 1', w.__revAPI.cell(0, 0) === 1, w.__revAPI.cell(0, 0));
+  // 涂绘后旧结果应失效
+  check('[UI] 涂绘后候选结果失效（提示重新搜索）', /重新搜索/.test($('#revCandidates').textContent));
+  $('.rev-tool[data-revtool="-1"]').click();
+  w.__revAPI.paint(0, 0, -1);
+  $('.rev-tool[data-revtool="1"]').click();
+}
 
 // 把目标改成平纹 4x4 并搜索（通过“全部不限”+“取自当前稿”按钮）：
 // 当前主稿是默认斜纹；这里先点“全部不限”验证，再“取自当前稿”
@@ -238,6 +325,21 @@ setTimeout(() => {
   check('应用后草稿尺寸 4x4',
     w.F.state.draft.ends === 4 && w.F.state.draft.picks === 4);
 
+  /* ---- 缺陷回归 1：16×16 目标网格容器不得塌缩、画布可点 ---- */
+  $('#btnReverse').click();
+  $('#revEnds').value = 16; $('#revPicks').value = 16; $('#revResize').click();
+  {
+    const sizer = $('#revBoardSizer');
+    const C = 26;
+    check('[UI] 16×16 占位器尺寸 416×416（容器未塌缩为 2×2）',
+      sizer.style.width === 16 * C + 'px' && sizer.style.height === 16 * C + 'px',
+      { w: sizer.style.width, h: sizer.style.height });
+    check('[UI] 16×16 画布 backing 尺寸 = 416*dpr（未被裁切）',
+      $('#revCanvas').width === 16 * C, { w: $('#revCanvas').width });
+    w.__revAPI.paint(15, 0, 1);
+    check('[UI] 16×16 角落格可写入', w.__revAPI.cell(15, 0) === 1);
+  }
+
   /* ---- 无精确解场景：4 综框画 5 综框才能实现的目标 ---- */
   // 在主 eval 词法环境里切到五枚缎模板
   w.__setSatin();
@@ -262,8 +364,37 @@ setTimeout(() => {
     $('#revSearch').click();
     setTimeout(() => {
       check('锁定越界被拦截并提示', /锁定穿综不可用/.test($('#revStatus').textContent));
-      console.log(`\nRESULT: ${fail ? 'FAIL' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
-      process.exit(fail ? 1 : 0);
+      $('#revLockThreading').checked = false;
+
+      /* ---- 缺陷回归 2：maxFloat=1 时超浮线精确方案不得被当作合规精确解 ---- */
+      // 目标取当前主稿（五枚缎 10×10），5 综框但浮线限值 1
+      $('#revLockTieup').checked = false;
+      $('#revShafts').value = 5; $('#revTreadles').value = 5;
+      $('#revMaxFloat').value = 1;
+      $('#revSearch').click();
+      setTimeout(() => {
+        const cards3 = $$('.rev-cand');
+        const headTxt = $('#revCandidates').textContent;
+        check('[UI] maxFloat=1：标题明确提示超长浮线（而非绿色合规精确）',
+          /超长浮线/.test(headTxt) && !/找到合规精确方案/.test(headTxt), headTxt.slice(0, 120));
+        check('[UI] 首位徽标标红超限', /浮长 [\d/]+.*超限/.test(cards3[0].textContent),
+          cards3[0].textContent.replace(/\s+/g, ' ').slice(0, 140));
+        check('[UI] 超浮线说明面板列出经/纬浮长',
+          /经浮长|纬浮长/.test($('#revExplain').textContent));
+        // 放大限值到足以容纳该缎纹实际浮长（重复后最长 9）后应变回合规精确
+        $('#revMaxFloat').value = 9;
+        $('#revSearch').click();
+        setTimeout(() => {
+          check('[UI] maxFloat=9：标题变回合规精确',
+            /找到合规精确方案/.test($('#revCandidates').textContent),
+            $('#revCandidates').textContent.replace(/\s+/g, ' ').slice(0, 100));
+          check('[UI] maxFloat=9：首位徽标浮长 ✓',
+            /浮长 [\d/]+ ?✓/.test($$('.rev-cand')[0].textContent),
+            $$('.rev-cand')[0].textContent.replace(/\s+/g, ' ').slice(0, 120));
+          console.log(`\nRESULT: ${fail ? 'FAIL' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
+          process.exit(fail ? 1 : 0);
+        }, 200);
+      }, 200);
     }, 60);
   }, 200);
 }, 200);

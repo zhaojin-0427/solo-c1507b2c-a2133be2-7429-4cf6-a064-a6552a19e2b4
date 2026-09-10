@@ -40,6 +40,9 @@
   function resizeBoards() {
     if (!R.target) return;
     const W = R.target.ends * CELL, H = R.target.picks * CELL;
+    // 占位元素撑起滚动容器，绝对定位的两张画布才能完整显示与点击
+    const sizer = $('#revBoardSizer');
+    if (sizer) { sizer.style.width = W + 'px'; sizer.style.height = H + 'px'; }
     for (const c of [cvs, ov]) {
       c.width = Math.round(W * dpr);
       c.height = Math.round(H * dpr);
@@ -122,6 +125,14 @@
       octx.lineWidth = 2.5;
       endSet.forEach(e => octx.strokeRect(e * CELL + 1.5, 1.5, CELL - 3, t.picks * CELL - 3));
       pickSet.forEach(p => octx.strokeRect(1.5, p * CELL + 1.5, t.ends * CELL - 3, CELL - 3));
+
+      // 超长浮线格：橙色实框（与冲突红叉区分）
+      if (R.explain.floatViolations && R.explain.floatViolations.length) {
+        octx.strokeStyle = 'rgba(184,134,47,.95)';
+        octx.lineWidth = 2;
+        for (const f of R.explain.floatViolations)
+          octx.strokeRect(f.e * CELL + 2.5, f.p * CELL + 2.5, CELL - 5, CELL - 5);
+      }
     }
 
     // 悬停
@@ -241,13 +252,26 @@
       infeasible: '',
     }[res.truncated] || '';
     head.className = 'rev-result-head';
-    if (res.exact) {
-      head.innerHTML = `✓ 找到精确方案：<b>100%</b> 目标格满足，共保留 ${res.candidates.length} 个候选　${truncTxt}`;
+    const nCand = res.candidates.length;
+    if (res.compliantExact) {
+      head.innerHTML = `✓ 找到合规精确方案：<b>100%</b> 目标格满足且浮线不超过 ${res.params.maxFloat}，` +
+        `共保留 ${nCand} 个候选　${truncTxt}`;
       head.style.color = 'var(--ok)';
+    } else if (res.exact) {
+      // 有目标全满足方案，但全部超浮线上限
+      head.innerHTML = `⚠ 目标可 100% 满足，但存在<b>超长浮线</b>（限值 ${res.params.maxFloat}），` +
+        `没有合规精确方案；下列最接近方案已标出超限格，可放宽浮线限值或增加综框/踏板。　${truncTxt}`;
+      head.style.color = 'var(--warn)';
+    } else if (res.hasCompliant) {
+      // 目标不能全满足，但存在浮线合规的最近似方案
+      const c0 = res.candidates.find(c => c.floatOK) || res.candidates[0];
+      head.innerHTML = `✗ 精确无解，返回浮线合规的最接近方案：首位匹配 <b>${(c0.matchRate * 100).toFixed(1)}%</b>` +
+        `（冲突 ${c0.conflicts}/${res.hardCount} 个目标格），浮线限值 ${res.params.maxFloat} 内。　${truncTxt}`;
+      head.style.color = 'var(--bad)';
     } else {
       const c0 = res.candidates[0];
-      head.innerHTML = `✗ 精确无解，返回最接近方案：首位匹配 <b>${(c0.matchRate * 100).toFixed(1)}%</b>` +
-        `（冲突 ${c0.conflicts}/${res.hardCount} 个目标格）　${truncTxt}`;
+      head.innerHTML = `✗ 精确无解且均超浮线，返回最接近方案：首位匹配 <b>${(c0.matchRate * 100).toFixed(1)}%</b>` +
+        `（冲突 ${c0.conflicts}/${res.hardCount} 个目标格，浮线限值 ${res.params.maxFloat}）。　${truncTxt}`;
       head.style.color = 'var(--bad)';
     }
     head.style.fontSize = '12.5px';
@@ -272,8 +296,14 @@
     const badges = [];
     badges.push(`<span class="rev-badge ${c.conflicts === 0 ? 'ok' : 'bad'}">` +
       `${c.conflicts === 0 ? '精确匹配' : '冲突 ' + c.conflicts}</span>`);
-    badges.push(`<span class="rev-badge ${c.floatOK ? 'ok' : 'warn2'}" title="最长经浮 ${c.maxWarp}、纬浮 ${c.maxWeft}，限值 ${c.draft.maxFloat}">` +
-      `浮长 ${c.maxWarp}/${c.maxWeft}${c.floatOK ? ' ✓' : ' 超限'}</span>`);
+    const overWarp = c.maxWarp > c.draft.maxFloat;
+    const overWeft = c.maxWeft > c.draft.maxFloat;
+    const floatCls = c.floatOK ? 'ok' : 'bad';
+    const overTxt = !c.floatOK
+      ? `（${overWarp ? '经浮' : ''}${overWarp && overWeft ? '、' : ''}${overWeft ? '纬浮' : ''}超限）`
+      : ' ✓';
+    badges.push(`<span class="rev-badge ${floatCls}" title="最长经浮 ${c.maxWarp}、纬浮 ${c.maxWeft}，限值 ${c.draft.maxFloat}">` +
+      `浮长 ${c.maxWarp}/${c.maxWeft}${overTxt}</span>`);
     badges.push(`<span class="rev-badge">综框 ${c.usedShafts}/${c.draft.shafts}</span>`);
     badges.push(`<span class="rev-badge">踏板 ${c.usedTreadles}/${c.draft.treadles}</span>`);
 
@@ -344,18 +374,32 @@
   /* ------------------------------- 冲突说明 ------------------------------- */
   function renderExplain(c) {
     const box = $('#revExplain');
-    if (c.conflicts === 0) {
+    const info = R.explain;
+    const conflictNotes = c.conflicts > 0 ? Reverse.explainNotes(info) : [];
+    const overNotes = !c.floatOK ? Reverse.floatNotes(info) : [];
+
+    if (!conflictNotes.length && !overNotes.length) {
       box.classList.add('hidden');
       box.innerHTML = '';
       return;
     }
-    const info = R.explain;
-    const notes = Reverse.explainNotes(info);
-    let html = '<h4>冲突原因（为什么无法同时满足）</h4><ul>';
-    notes.slice(0, 12).forEach(n => { html += '<li>' + n + '</li>'; });
-    html += '</ul>';
-    if (notes.length > 12) html += `<div class="rev-more">另有 ${notes.length - 12} 条同类原因未列出。</div>`;
-    html += `<div class="rev-more">左图红叉格 = 目标与候选不一致；红框列/行 = 共享综框或踏板的冲突经/纬；灰点 = “不限”格被候选实现成的朝向。</div>`;
+
+    let html = '';
+    if (conflictNotes.length) {
+      html += '<h4>目标冲突原因（为什么无法同时满足）</h4><ul>';
+      conflictNotes.slice(0, 12).forEach(n => { html += '<li>' + n + '</li>'; });
+      html += '</ul>';
+      if (conflictNotes.length > 12)
+        html += `<div class="rev-more">另有 ${conflictNotes.length - 12} 条同类原因未列出。</div>`;
+    }
+    if (overNotes.length) {
+      html += '<h4>超长浮线（超过限值 ' + c.draft.maxFloat + '）</h4><ul>';
+      overNotes.forEach(n => { html += '<li>' + n + '</li>'; });
+      html += '</ul>';
+      html += '<div class="rev-more">左图橙框 = 超长浮线格；可放宽浮线限值、增加综框/踏板，或改标部分目标格为“不限”。</div>';
+    }
+    if (conflictNotes.length)
+      html += `<div class="rev-more">左图红叉格 = 目标与候选不一致；红框列/行 = 共享综框或踏板的冲突经/纬；灰点 = “不限”格被候选实现成的朝向。</div>`;
     box.innerHTML = html;
     box.classList.remove('hidden');
   }
@@ -505,7 +549,9 @@
       $('#revPicks').value = R.target.picks;
     }
     $('#reverseModal').classList.remove('hidden');
-    requestAnimationFrame(resizeBoards);
+    // 同步应用尺寸（离线/无 rAF 环境也能正确布局），再安排一帧确保最终尺寸
+    resizeBoards();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(resizeBoards);
   }
 
   /* ------------------------------- 初始化 ------------------------------- */
@@ -518,6 +564,14 @@
     R.target = Reverse.makeTarget(4, 4);
     syncDimsInputs();
     bind();
+    // 测试钩子：读取/涂绘目标格、取当前结果（浏览器中无害，仅供离线自动化）
+    window.__revAPI = {
+      cell: (e, p) => R.target.grid[p][e],
+      paint: (e, p, v) => { R.target.grid[p][e] = v; invalidateResults(); resizeBoards(); },
+      result: () => R.result,
+      selected: () => R.selected,
+      explain: () => R.explain,
+    };
     return true;
   }
 

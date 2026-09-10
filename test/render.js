@@ -10,97 +10,157 @@ const dom = new JSDOM(html, { url: 'http://x/', runScripts: 'outside-only', pret
 const w = dom.window;
 w.requestAnimationFrame = () => 0;
 w.HTMLCanvasElement.prototype.getContext = function (type, attr) {
-  // node-canvas 2D context
-  return this._nodeCanvas ? this._nodeCanvas.getContext(type, attr)
-       : (this._nodeCanvas = createCanvas(this.width || 300, this.height || 150)).getContext(type, attr);
+  // 持久复用同一个 node-canvas：reverse-ui 会缓存 ctx，重建实例会让绘制落到旧画布。
+  // 尺寸变化时由 node-canvas 自身的 width 赋值清屏，ctx 仍指向同一 2d context。
+  if (!this._nodeCanvas) this._nodeCanvas = createCanvas(this.width || 300, this.height || 150);
+  if (this._nodeCanvas.width !== this.width) this._nodeCanvas.width = this.width;
+  if (this._nodeCanvas.height !== this.height) this._nodeCanvas.height = this.height;
+  return this._nodeCanvas.getContext(type, attr);
 };
-// jsdom canvas 无真实像素，createElement('canvas') 替换为 node-canvas
 const origCreate = w.document.createElement.bind(w.document);
 w.document.createElement = function (tag) {
-  if (String(tag).toLowerCase() === 'canvas') return createCanvas(10, 10);
+  if (String(tag).toLowerCase() === 'canvas') { const c = createCanvas(10, 10); c.style = {}; return c; }
   return origCreate(tag);
 };
 w.HTMLElement.prototype.scrollTo = () => {};
 w.HTMLElement.prototype.getBoundingClientRect = function () {
   return { left: 0, top: 0, width: 0, height: 0 };
 };
+w.createCanvas = createCanvas;
+// 拦截 DOMContentLoaded：app.js 的 init 会自动 setupCanvas（appendChild node-canvas 会失败）
+const _addListener = w.document.addEventListener.bind(w.document);
+w.document.addEventListener = function (type, fn, opts) {
+  if (type === 'DOMContentLoaded') return;
+  return _addListener(type, fn, opts);
+};
+w.__fs = fs;
 
-const eng = fs.readFileSync(path.join(ROOT, 'static/engine.js'), 'utf8').replace(/'use strict';/, '');
-const app = fs.readFileSync(path.join(ROOT, 'static/app.js'), 'utf8').replace(/'use strict';/, '');
-w.eval(eng + app + '\n;window.__state=state;');
-const state = w.__state;
+const R = (p) => fs.readFileSync(p, 'utf8');
+const eng = R(path.join(ROOT, 'static/engine.js')).replace(/'use strict';/, '');
+const rev = R(path.join(ROOT, 'static/reverse.js')).replace(/'use strict';/, '');
+const revui = R(path.join(ROOT, 'static/reverse-ui.js'));
+const app = R(path.join(ROOT, 'static/app.js')).replace(/'use strict';/, '');
 
-// 手动搭建板：setupCanvas 依赖 appendChild/DOM，这里模拟
-state.analysis = require_engine(state.draft);
-function require_engine() { return w.Engine.analyze(state.draft); }
+// 所有场景都在同一 eval 词法作用域内定义与执行
+w.eval(eng + rev + revui + app + `
+  boardEl = document.querySelector('#board');
+  state.analysis = Engine.analyze(state.draft);
+  baseCvs = createCanvas(10, 10);
+  ovCvs = createCanvas(10, 10);
+  baseCvs.style = {}; ovCvs.style = {};
+  baseCtx = baseCvs.getContext('2d');
+  ovCtx = ovCvs.getContext('2d');
+  dpr = 1;
 
-// 用 node-canvas 替换 setupCanvas 中的元素
-const board = w.document.querySelector('#board');
-const baseCvs = createCanvas(10, 10);
-const ovCvs = createCanvas(10, 10);
-baseCvs.style = {}; ovCvs.style = {};
-baseCvs.id = 'baseCanvas'; ovCvs.id = 'overlayCanvas';
-board.appendChild(baseCvs); board.appendChild(ovCvs);
-// 让 app.js 内部变量指向我们的 canvas：通过重新调用 setupCanvas
-w.eval('setupCanvas(); dpr=1;');
+  function exportShot(file, fn) {
+    if (fn) fn();
+    state.analysis = Engine.analyze(state.draft);
+    resizeCanvases(); drawBase(); drawOverlay(1000);
+    const L = state.layout;
+    const out = createCanvas(L.W, L.H);
+    const o = out.getContext('2d');
+    o.drawImage(baseCvs, 0, 0, L.W, L.H);
+    o.drawImage(ovCvs, 0, 0, L.W, L.H);
+    globalThis.__fs.writeFileSync(file, out.toBuffer('image/png'));
+    console.log('wrote', file, L.W + 'x' + L.H);
+  }
+  globalThis.__exportShot = exportShot;
 
-// resizeCanvases 使用内部 canvas；重新赋值
-function exportShot(file, mutate) {
-  if (mutate) mutate();
-  w.eval('state.analysis=Engine.analyze(state.draft); resizeCanvases(); drawBase();');
-  const L = state.layout;
-  // baseCvs 已按 layout 重设；drawOverlay(now)
-  w.eval(`drawOverlay(1000);`);
-  // 叠加层需合成到一张图
-  const out = createCanvas(L.W, L.H);
-  const o = out.getContext('2d');
-  o.drawImage(baseCvs, 0, 0, L.W, L.H);
-  o.drawImage(ovCvs, 0, 0, L.W, L.H);
-  fs.writeFileSync(file, out.toBuffer('image/png'));
-  console.log('wrote', file, L.W + 'x' + L.H);
-}
+  exportShot('/tmp/render_default.png');
 
-exportShot('/tmp/render_default.png');
+  exportShot('/tmp/render_issues.png', () => {
+    const d = state.draft;
+    d.threading[2] = 99;
+    for (let i = 0; i < 8; i++) d.threading[i] = 0;
+    for (let i = 0; i < 6; i++) d.treadling[i] = 0;
+    d.tieup = d.tieup.map((row, s) => row.map((v, t) => t === 0 ? s === 0 : false));
+    d.treadling[3] = -1;
+    d.maxFloat = 3;
+    afterEdit(); state.activeIssue = 0;
+  });
 
-exportShot('/tmp/render_issues.png', () => {
-  const d = state.draft;
-  d.threading[2] = 99;
-  for (let i = 0; i < 8; i++) d.threading[i] = 0;
-  for (let i = 0; i < 6; i++) d.treadling[i] = 0;
-  d.tieup = d.tieup.map((row, s) => row.map((v, t) => t === 0 ? s === 0 : false));
-  d.treadling[3] = -1;
-  d.maxFloat = 3;
-  // 选一个 issue 高亮
-  w.eval('afterEdit(); state.activeIssue=0; drawOverlay(1000);');
-});
+  exportShot('/tmp/render_playback.png', () => {
+    state.draft = makeTemplate('twill');
+    afterStructural(); state.playing = true; state.playPick = 5;
+  });
 
-// 播放帧
-exportShot('/tmp/render_playback.png', () => {
-  w.eval("state.draft=makeTemplate('twill'); afterStructural(); state.playing=true; state.playPick=5; drawOverlay(1000);");
-});
+  exportShot('/tmp/render_selection.png', () => {
+    state.selection = { grid: 'tieup', r0: 0, c0: 0, r1: 2, c1: 2 };
+  });
 
-// 选区
-exportShot('/tmp/render_selection.png', () => {
-  w.eval("state.selection={grid:'tieup',r0:0,c0:0,r1:2,c1:2}; drawOverlay(1000);");
-});
-
-// 五枚缎彩色 + 自定义色带
-exportShot('/tmp/render_satin.png', () => {
-  w.eval(`
+  exportShot('/tmp/render_satin.png', () => {
     state.draft = makeTemplate('satin');
-    for(let i=0;i<state.draft.ends;i++) state.draft.warpColor[i]=[0,1,2,3][i%4];
-    for(let i=0;i<state.draft.picks;i++) state.draft.weftColor[i]=[7,4,5,6][i%4];
+    for (let i = 0; i < state.draft.ends; i++) state.draft.warpColor[i] = [0,1,2,3][i%4];
+    for (let i = 0; i < state.draft.picks; i++) state.draft.weftColor[i] = [7,4,5,6][i%4];
     afterStructural();
-  `);
-});
+  });
 
-// 正反面预览导出
-w.eval(`
-  drawRepeatPreview(document.querySelector('#frontPreview'),'front');
-  drawRepeatPreview(document.querySelector('#backPreview'),'back');
+  drawRepeatPreview(document.querySelector('#frontPreview'), 'front');
+  drawRepeatPreview(document.querySelector('#backPreview'), 'back');
+  globalThis.__savePreview = (id, file) => {
+    const el = document.querySelector('#' + id);
+    const nc = el._nodeCanvas || el;
+    globalThis.__fs.writeFileSync(file, nc.toBuffer('image/png'));
+    console.log('wrote', file);
+  };
+  __savePreview('frontPreview', '/tmp/render_frontPreview.png');
+  __savePreview('backPreview', '/tmp/render_backPreview.png');
+
+  // 目标反推：16×16 斜纹目标、maxFloat=1（超浮线场景）
+  document.getElementById('btnReverse').click();
+  document.getElementById('revEnds').value = 16;
+  document.getElementById('revPicks').value = 16;
+  document.getElementById('revResize').click();
+  document.getElementById('revFromDraft').click();
+  document.getElementById('revMaxFloat').value = 1;
+  globalThis.__exportReverse = () => {
+    const c = document.getElementById('revCanvas');
+    const o = document.getElementById('revOverlay');
+    const cc = c._nodeCanvas || c, oo = o._nodeCanvas || o;
+    const out = createCanvas(cc.width, cc.height);
+    out.getContext('2d').drawImage(cc, 0, 0);
+    out.getContext('2d').drawImage(oo, 0, 0);
+    globalThis.__fs.writeFileSync('/tmp/render_reverse_float.png', out.toBuffer('image/png'));
+    console.log('wrote /tmp/render_reverse_float.png', cc.width + 'x' + cc.height);
+    const sizer = document.getElementById('revBoardSizer');
+    console.log('revBoardSizer', sizer.style.width, sizer.style.height);
+  };
+  globalThis.__exportConflictShot = () => {
+    const c = document.getElementById('revCanvas');
+    const o = document.getElementById('revOverlay');
+    const cc = c._nodeCanvas || c, oo = o._nodeCanvas || o;
+    const out = createCanvas(cc.width, cc.height);
+    out.getContext('2d').drawImage(cc, 0, 0);
+    out.getContext('2d').drawImage(oo, 0, 0);
+    globalThis.__fs.writeFileSync('/tmp/render_reverse_conflict.png', out.toBuffer('image/png'));
+    console.log('wrote /tmp/render_reverse_conflict.png', cc.width + 'x' + cc.height);
+  };
+  globalThis.__runConflictScenario = () => {
+    document.getElementById('btnReverse').click();
+    document.getElementById('revEnds').value = 10;
+    document.getElementById('revPicks').value = 10;
+    document.getElementById('revResize').click();
+    state.draft = makeTemplate('satin');
+    state.draft = Engine.resize(state.draft, { shafts: 5, treadles: 5, ends: 10, picks: 10 });
+    state.draft.maxFloat = 5;
+    afterStructural();
+    document.getElementById('revFromDraft').click();
+    document.getElementById('revShafts').value = 4;
+    document.getElementById('revTreadles').value = 4;
+    document.getElementById('revMaxFloat').value = 5;
+    document.getElementById('revSearch').click();
+  };
+  document.getElementById('revSearch').click();
 `);
-['frontPreview', 'backPreview'].forEach(id => {
-  const cvs = w.document.querySelector('#' + id);
-  fs.writeFileSync('/tmp/render_' + id + '.png', cvs.toBuffer('image/png'));
-  console.log('wrote /tmp/render_' + id + '.png');
-});
+
+setTimeout(() => {
+  w.eval(`__exportReverse();`);
+}, 300);
+
+// 额外：目标冲突场景（4 综框做 5 综缎纹），验证红叉叠色
+setTimeout(() => {
+  w.eval(`__runConflictScenario();`);
+  setTimeout(() => {
+    w.eval(`__exportConflictShot();`);
+  }, 300);
+}, 600);

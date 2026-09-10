@@ -23,6 +23,7 @@ const Reverse = (() => {
   const LEAF_MAX = 1800;     // 完整方案收集上限
   const TIME_MAX = 2500;     // 毫秒上限
   const TOP_N = 12;          // 候选保留数
+  const COMPLIANT_EXACT_ENOUGH = 6; // 收集到这么多合规精确方案即可停止
 
   const now = () => (typeof performance !== 'undefined' && performance.now)
     ? performance.now() : Date.now();
@@ -205,18 +206,7 @@ const Reverse = (() => {
     }
     replayLocks();
 
-    function blockCost(b) {
-      const lv = lockVal[b];
-      if (lv === 1) return c0[b];
-      if (lv === 0) return c1[b];
-      return Math.min(c0[b], c1[b]);
-    }
-    function lowerBound() {
-      let lb = 0;
-      for (let b = 0; b < NB; b++) lb += blockCost(b);
-      return lb;
-    }
-    /** 若向块 b 再放入一个值 v，块代价的增量。 */
+    /** 若向块 b 再放入一个值 v，块代价的增量（用于分支排序；锁定块为固定代价）。 */
     function blockInc(b, v) {
       const a = c0[b], z = c1[b];
       const lv = lockVal[b];
@@ -265,8 +255,9 @@ const Reverse = (() => {
     if (exactImpossible) truncated = 'infeasible';
 
     function rankCmp(a, b) {
-      // 目标格匹配率 → 改动格数 → 实际占用综框数 → 实际占用踏板数
-      return (b.matchRate - a.matchRate) ||
+      // 浮线合规 → 目标格匹配率 → 改动格数 → 实际占用综框数 → 实际占用踏板数
+      return ((b.floatOK ? 1 : 0) - (a.floatOK ? 1 : 0)) ||
+             (b.matchRate - a.matchRate) ||
              (a.changes - b.changes) ||
              (a.usedShafts - b.usedShafts) ||
              (a.usedTreadles - b.usedTreadles) ||
@@ -279,43 +270,52 @@ const Reverse = (() => {
       top.splice(i, 0, cand);
       if (top.length > TOP_N) top.pop();
     }
+    /** top 中是否已有「浮线合规且目标全满足」的候选（可据此提前结束搜索）。 */
+    function hasCompliantExact() {
+      return top.some(c => c.floatOK && c.conflicts === 0);
+    }
 
     /* ---------------- 叶节点：定联结值、构造候选、算指标 ---------------- */
-    function makeLeaf() {
-      const tie = Array.from({ length: S }, () => new Array(T).fill(false));
-      const tieVal = new Int8Array(NB);
-      let conflicts = 0;
-      for (let s = 0; s < S; s++) {
-        for (let t = 0; t < T; t++) {
-          const b = s * T + t;
-          const a = c0[b], z = c1[b];
-          const lv = lockVal[b];
-          let val;
-          if (lv !== null) {
-            val = lv;
-            conflicts += lv === 1 ? a : z;
-          } else if (a > 0 && z > 0) {
-            conflicts += Math.min(a, z);
-            const baseVal = (base.tieup[s] && base.tieup[s][t]) ? 1 : 0;
-            val = a === z ? (baseVal ? 1 : 0) : (z > a ? 1 : 0);
-          } else if (z > 0) {
-            val = 1;
-          } else if (a > 0) {
-            val = 0;
-          } else {
-            // 块内只有“不限”格：取当前稿联结值，减少改动
-            val = (base.tieup[s] && base.tieup[s][t]) ? 1 : 0;
-          }
-          tieVal[b] = val;
-          tie[s][t] = !!val;
-        }
+    /**
+     * 决定一个交叉块的联结取值。
+     * - 锁定块：只能取锁定值（可能产生目标冲突）。
+     * - 同时要求经在上 / 纬在上（mixed）：取多数派（产生冲突），平局偏当前稿。
+     * - 只有单一硬要求：必须取满足硬格的值（不产生冲突）。
+     * - 块内只有“不限”格（wild）：取值不影响目标匹配率，可作为浮线调整自由度。
+     * 返回 { val, fixed, wild }。
+     */
+    function resolveBlock(s, t) {
+      const b = s * T + t;
+      const a = c0[b], z = c1[b];
+      const lv = lockVal[b];
+      if (lv !== null) return { val: lv, fixed: true, wild: false };
+      if (a > 0 && z > 0) {
+        const baseVal = (base.tieup[s] && base.tieup[s][t]) ? 1 : 0;
+        return { val: a === z ? baseVal : (z > a ? 1 : 0), fixed: true, wild: false };
       }
+      if (z > 0) return { val: 1, fixed: true, wild: false };
+      if (a > 0) return { val: 0, fixed: true, wild: false };
+      return { val: (base.tieup[s] && base.tieup[s][t]) ? 1 : 0, fixed: false, wild: true };
+    }
 
-      const threading = Array.from(es);
-      const treadling = Array.from(ps);
-      const key = threading.join(',') + '|' + Array.from(tieVal).join('') + '|' + treadling.join(',');
+    function makeDraftFromTie(tie, threading, treadling) {
+      const palLen = base.palette ? base.palette.length : 0;
+      const palIdx = (i) => (Number.isInteger(i) && palLen ? ((i % palLen) + palLen) % palLen : 0);
+      const warpAt = (e) => (base.warpColor && base.warpColor[e % base.ends] != null)
+        ? palIdx(base.warpColor[e % base.ends]) : 0;
+      const weftAt = (p) => (base.weftColor && base.weftColor[p % base.picks] != null)
+        ? palIdx(base.weftColor[p % base.picks]) : 1;
+      return {
+        shafts: S, treadles: T, ends: E, picks: P, maxFloat,
+        threading: threading.slice(), treadling: treadling.slice(),
+        tieup: tie.map(row => row.slice()),
+        warpColor: Array.from({ length: E }, (_, e) => warpAt(e)),
+        weftColor: Array.from({ length: P }, (_, p) => weftAt(p)),
+        palette: (base.palette || Engine.PALETTE).map(c => ({ ...c })),
+      };
+    }
 
-      // 改动格数（只统计两边都存在的可比区域；扩格在摘要中另计）
+    function countChanges(tie, threading, treadling) {
       let changes = 0;
       for (let e = 0; e < Math.min(E, base.ends); e++)
         if (threading[e] !== base.threading[e]) changes++;
@@ -324,34 +324,25 @@ const Reverse = (() => {
       for (let s = 0; s < Math.min(S, base.shafts); s++)
         for (let t = 0; t < Math.min(T, base.treadles); t++)
           if (tie[s][t] !== !!base.tieup[s][t]) changes++;
+      return changes;
+    }
 
-      let usedShafts = 0;
-      threading.forEach(s => { usedShafts |= 1 << s; });
-      let usedTreadles = 0;
-      treadling.forEach(t => { usedTreadles |= 1 << t; });
-      usedShafts = bitCount(usedShafts);
-      usedTreadles = bitCount(usedTreadles);
-
-      const palLen = base.palette ? base.palette.length : 0;
-      const palIdx = (i) => (Number.isInteger(i) && palLen ? ((i % palLen) + palLen) % palLen : 0);
-      const warpAt = (e) => (base.warpColor && base.warpColor[e % base.ends] != null)
-        ? palIdx(base.warpColor[e % base.ends]) : 0;
-      const weftAt = (p) => (base.weftColor && base.weftColor[p % base.picks] != null)
-        ? palIdx(base.weftColor[p % base.picks]) : 1;
-      const draft = {
-        shafts: S, treadles: T, ends: E, picks: P, maxFloat,
-        threading, treadling, tieup: tie,
-        warpColor: Array.from({ length: E }, (_, e) => warpAt(e)),
-        weftColor: Array.from({ length: P }, (_, p) => weftAt(p)),
-        palette: (base.palette || Engine.PALETTE).map(c => ({ ...c })),
-      };
+    function pushCandidate(tie, threading, treadling, conflicts) {
+      const changes = countChanges(tie, threading, treadling);
+      let usedSMask = 0, usedTMask = 0;
+      threading.forEach(s => { usedSMask |= 1 << s; });
+      treadling.forEach(t => { usedTMask |= 1 << t; });
+      const draft = makeDraftFromTie(tie, threading, treadling);
       const A = Engine.analyze(draft);
-      const cand = {
+      const tieFlat = tie.map(row => row.map(v => v ? 1 : 0).join('')).join('');
+      const key = threading.join(',') + '|' + tieFlat + '|' + treadling.join(',');
+      addCandidate({
         key, conflicts,
         match: hardCount - conflicts,
         matchRate: hardCount ? (hardCount - conflicts) / hardCount : 0,
         changes,
-        usedShafts, usedTreadles,
+        usedShafts: bitCount(usedSMask),
+        usedTreadles: bitCount(usedTMask),
         maxWarp: A.stats.maxWarpFloat,
         maxWeft: A.stats.maxWeftFloat,
         floatOK: A.stats.maxWarpFloat <= maxFloat && A.stats.maxWeftFloat <= maxFloat,
@@ -359,8 +350,118 @@ const Reverse = (() => {
         errors: A.validation.errors,
         warns: A.validation.warns,
         draft,
+      });
+    }
+
+    function makeLeaf() {
+      // 每个块的固定/自由属性与默认取值；冲突数只由固定块决定
+      const info = Array.from({ length: S }, (_, s) =>
+        Array.from({ length: T }, (_, t) => resolveBlock(s, t)));
+      const tie0 = info.map(row => row.map(x => !!x.val));
+      let conflicts = 0;
+      const wildIdx = [];
+      for (let s = 0; s < S; s++) {
+        for (let t = 0; t < T; t++) {
+          const x = info[s][t], b = s * T + t;
+          if (x.wild) wildIdx.push(b);
+          else if (lockVal[b] !== null) conflicts += lockVal[b] === 1 ? c0[b] : c1[b];
+          else if (c0[b] > 0 && c1[b] > 0) conflicts += Math.min(c0[b], c1[b]);
+        }
+      }
+
+      const threading = Array.from(es);
+      const treadling = Array.from(ps);
+
+      // 基准变体
+      pushCandidate(tie0, threading, treadling, conflicts);
+      const baseA = Engine.analyze(makeDraftFromTie(tie0, threading, treadling));
+      const baseFloatOK = baseA.stats.maxWarpFloat <= maxFloat &&
+                          baseA.stats.maxWeftFloat <= maxFloat;
+
+      // 仅当基准浮线超限、且存在可调的“纯不限”自由块时，枚举这些块的取值。
+      // 它们不改变目标匹配率，却可能把组织交织得更密以满足浮线上限。
+      if (!baseFloatOK && wildIdx.length) {
+        const K = wildIdx.length;
+        // 自由块过多时只翻转与超浮长线相交的块，控制枚举规模
+        const flipMask = chooseFloatBlocks(wildIdx, threading, treadling, tie0);
+        const variants = enumerateTieVariants(tie0, wildIdx, flipMask, threading, treadling);
+        for (const tie of variants) pushCandidate(tie, threading, treadling, conflicts);
+      }
+    }
+
+    /**
+     * 选出与当前超浮长线相交的自由块（这些块的翻转才可能压住浮线）。
+     * 返回布尔数组，长度 = wildIdx.length。
+     */
+    function chooseFloatBlocks(wildIdx, threading, treadling, tie) {
+      const A0 = Engine.analyze(makeDraftFromTie(tie, threading, treadling));
+      const rel = new Set();
+      const markRun = (isWarp, runs) => {
+        runs.forEach(run => {
+          if (run.length <= maxFloat) return;
+          if (isWarp) {
+            // 经浮沿纬线方向：相关交叉块为 该经综框 × 浮段各纬踏板
+            const s = threading[run.end];
+            for (let k = 0; k < run.length; k++)
+              rel.add(s * T + treadling[(run.start + k) % P]);
+          } else {
+            // 纬浮沿经线方向：相关交叉块为 浮段各经综框 × 该纬踏板
+            const t = treadling[run.pick];
+            for (let k = 0; k < run.length; k++)
+              rel.add(threading[(run.start + k) % E] * T + t);
+          }
+        });
       };
-      addCandidate(cand);
+      markRun(true, A0.fl.warpRuns);
+      markRun(false, A0.fl.weftRuns);
+      return wildIdx.map(b => rel.has(b));
+    }
+
+    /**
+     * 枚举被选中自由块的取值组合（其余保持基准）。
+     * 按翻转块数 1、2、3… 递增搜索，命中浮线合规即返回；总尝试次数封顶，
+     * 超时未命中则不返回变体（调用方沿用基准近似方案）。
+     */
+    function enumerateTieVariants(tie0, wildIdx, flipMask, threading, treadling) {
+      const chosen = [];
+      wildIdx.forEach((b, i) => { if (flipMask[i]) chosen.push(b); });
+      if (!chosen.length) return [];
+      const TRIAL_MAX = 600;
+      let trials = 0;
+      const out = [];
+      // 按子集大小迭代加深
+      const n = chosen.length;
+      const combo = [];
+      (function search(start) {
+        if (out.length || trials >= TRIAL_MAX) return;
+        if (combo.length > 0) {
+          trials++;
+          const tie = flipCopy(tie0, combo);
+          if (tieFloatsOK(tie, threading, treadling)) { out.push(tie); return; }
+        }
+        if (combo.length >= Math.min(n, 4)) return; // 最多翻 4 个自由块
+        for (let i = start; i < n && trials < TRIAL_MAX && !out.length; i++) {
+          combo.push(chosen[i]);
+          search(i + 1);
+          combo.pop();
+        }
+      })(0);
+      return out;
+    }
+
+    function flipCopy(tie, blocks) {
+      const cp = tie.map(row => row.slice());
+      for (const b of blocks) {
+        const s = Math.floor(b / T), t = b % T;
+        cp[s][t] = !cp[s][t];
+      }
+      return cp;
+    }
+
+    function tieFloatsOK(tie, threading, treadling) {
+      const d = makeDraftFromTie(tie, threading, treadling);
+      const A = Engine.analyze(d);
+      return A.stats.maxWarpFloat <= maxFloat && A.stats.maxWeftFloat <= maxFloat;
     }
 
     /* ------------------------------- DFS ------------------------------- */
@@ -432,6 +533,12 @@ const Reverse = (() => {
       if (!choice) {
         leaves++;
         makeLeaf();
+        // 已找到浮线合规且目标全满足的方案后，继续搜索只会得到同构标号；
+        // 收集到足够（6 个）合规精确代表即可提前结束。
+        if (hasCompliantExact() &&
+            top.filter(c => c.floatOK && c.conflicts === 0).length >= COMPLIANT_EXACT_ENOUGH) {
+          stop = true;
+        }
         if (leaves >= EFFECTIVE_LEAF_MAX) { truncated = truncated || 'leaves'; stop = true; }
         return;
       }
@@ -485,9 +592,13 @@ const Reverse = (() => {
     dfs();
 
     top.forEach((c, i) => { c.rank = i + 1; });
+    const anyExact = top.some(c => c.conflicts === 0);
+    const anyCompliant = top.some(c => c.floatOK);
     return {
       ok: true,
-      exact: top.length > 0 && top[0].conflicts === 0,
+      exact: anyExact,                 // 存在目标全满足方案（不论是否超浮线）
+      compliantExact: top.some(c => c.conflicts === 0 && c.floatOK),
+      hasCompliant: anyCompliant,     // 存在浮线合规方案（即便有目标冲突）
       truncated,
       exactImpossible,
       nodes, leaves,
@@ -593,7 +704,31 @@ const Reverse = (() => {
       }
     }
 
-    return { mismatches, realized, warpConflicts, weftConflicts, blockConflicts };
+    // 超长浮线（相对候选自身的 maxFloat 限值），并收集违规格坐标供叠色
+    const fl = Engine.floats(d, A);
+    const limit = d.maxFloat || 1;
+    const floatViolations = [];   // {p,e,axis,length}
+    const overWarp = [], overWeft = [];
+    fl.warpRuns.forEach(run => {
+      if (run.length > limit) {
+        overWarp.push(run);
+        for (let k = 0; k < run.length; k++)
+          floatViolations.push({ p: (run.start + k) % d.picks, e: run.end, axis: 'warp', length: run.length });
+      }
+    });
+    fl.weftRuns.forEach(run => {
+      if (run.length > limit) {
+        overWeft.push(run);
+        for (let k = 0; k < run.length; k++)
+          floatViolations.push({ p: run.pick, e: (run.start + k) % d.ends, axis: 'weft', length: run.length });
+      }
+    });
+
+    return {
+      mismatches, realized, warpConflicts, weftConflicts, blockConflicts,
+      maxWarp: fl.maxWarp, maxWeft: fl.maxWeft, floatLimit: limit,
+      overWarp, overWeft, floatViolations,
+    };
   }
 
   /** 中文诊断条目（界面与测试共用）。 */
@@ -616,6 +751,26 @@ const Reverse = (() => {
         `${b.n1} 格要求经在上、${b.n0} 格要求纬在上，只能取其一。`);
     });
     return notes;
+  }
+
+  /** 超长浮线中文条目（目标满足但违反浮线上限时展示）。 */
+  function floatNotes(info) {
+    const notes = [];
+    const seenE = new Set();
+    info.overWarp.forEach(run => {
+      if (seenE.has(run.end)) return;
+      seenE.add(run.end);
+      notes.push(`第 ${run.end + 1} 根经线存在 ${run.length} 根纬长的经浮长（限值 ${info.floatLimit}）：` +
+        `该经在连续 ${run.length} 纬上都浮在纬上。`);
+    });
+    const seenP = new Set();
+    info.overWeft.forEach(run => {
+      if (seenP.has(run.pick)) return;
+      seenP.add(run.pick);
+      notes.push(`第 ${run.pick + 1} 纬存在 ${run.length} 根经长的纬浮长（限值 ${info.floatLimit}）：` +
+        `该纬在连续 ${run.length} 经上都浮在经上。`);
+    });
+    return notes.slice(0, 12);
   }
 
   /* ----------------------------- 改动摘要 ----------------------------- */
@@ -663,7 +818,7 @@ const Reverse = (() => {
 
   return {
     makeTarget, resizeTarget, clearTarget, invertTarget, targetFromDraft,
-    search, explain, explainNotes, changeSummary,
+    search, explain, explainNotes, floatNotes, changeSummary,
   };
 })();
 

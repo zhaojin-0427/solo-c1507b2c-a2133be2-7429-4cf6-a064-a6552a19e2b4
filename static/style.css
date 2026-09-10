@@ -340,6 +340,8 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); outline-offse
 }
 .rev-board-wrap canvas { position: absolute; left: 0; top: 0; display: block; }
 #revOverlay { pointer-events: none; }
+/* 绝对定位的 canvas 脱离文档流，用占位元素撑出实际网格尺寸，避免容器塌缩为 0 */
+.rev-board-sizer { width: 104px; height: 104px; }
 
 .rev-legend {
   display: flex; flex-wrap: wrap; gap: 12px;
@@ -361,6 +363,10 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); outline-offse
   background:
     radial-gradient(circle at 50% 50%, rgba(45,42,36,.55) 0 24%, transparent 25%),
     #dfe7d6;
+}
+.sw-float {
+  background: #f2ecdd;
+  border: 2px solid var(--warn) !important;
 }
 
 .rev-cond label { flex-direction: column; align-items: flex-start; gap: 2px; }
