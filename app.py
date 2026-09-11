@@ -20,6 +20,15 @@
   DELETE /api/batches/<id>/marks/<mid>   删除标记
   POST /api/batches/<id>/revisions       记录“另存为新草稿”的修订
 
+  上机工艺单：
+  GET  /api/sheets                       工艺单列表（含进度摘要）
+  POST /api/sheets                       从当前草稿冻结工艺单（快照 + 工艺参数 + 穿筘方案 + 步骤）
+  GET  /api/sheets/<id>                  工艺单详情（含步骤与确认进度）
+  DELETE /api/sheets/<id>                删除工艺单
+  POST /api/sheets/<id>/steps/<sid>/done 确认步骤（必须按顺序，前序未确认则拒绝）
+  POST /api/sheets/<id>/steps/<sid>/undo 撤回步骤（只能倒序撤回最后已确认项）
+  POST /api/sheets/<id>/copy             复制新版（不改写原单；原单中与新单不符的步骤标记失效）
+
 所有静态资源均位于 static/ 目录，无外部 CDN 依赖，可离线运行。
 草稿与试织批次持久化到 SQLite（instance/drafts.db）。
 """
@@ -122,6 +131,43 @@ def init_db():
             summary     TEXT NOT NULL,
             detail      TEXT NOT NULL,       -- JSON：逐项修订参数
             created_at  TEXT NOT NULL
+        )
+        """
+    )
+    # 上机工艺单：创建时冻结草稿快照与工艺参数；复制新版不改写原单
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loom_sheets (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            draft_id    INTEGER,
+            draft_name  TEXT NOT NULL,
+            snapshot    TEXT NOT NULL,       -- 冻结的草稿快照
+            params      TEXT NOT NULL,       -- JSON：工艺参数（成品尺寸/缩率/密度/筘/废纱/纱重）
+            derived     TEXT NOT NULL,       -- JSON：推算结果（整经根数/筘幅/经长/纬数/分色用量）
+            reed_plan   TEXT NOT NULL,       -- JSON：已选穿筘方案
+            fingerprint TEXT NOT NULL,       -- 快照+参数指纹，用于识别草稿/参数变化
+            version     INTEGER NOT NULL DEFAULT 1,
+            parent_id   INTEGER,             -- 复制来源（上一版工艺单 id）
+            status      TEXT NOT NULL DEFAULT 'open',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        )
+        """
+    )
+    # 工艺单步骤：整经色序 / 穿综 / 穿筘的连续区段；确认只能顺序、撤回只能倒序
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loom_steps (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            sheet_id   INTEGER NOT NULL REFERENCES loom_sheets(id) ON DELETE CASCADE,
+            step_index INTEGER NOT NULL,
+            kind       TEXT NOT NULL,        -- warp | thread | dent
+            label      TEXT NOT NULL,
+            detail     TEXT NOT NULL,        -- JSON：区段信息（from/to/color/cycle/seq…）
+            done       INTEGER NOT NULL DEFAULT 0,
+            done_at    TEXT,
+            stale      INTEGER NOT NULL DEFAULT 0   -- 复制新版后与新单不符 → 失效
         )
         """
     )
@@ -575,6 +621,298 @@ def add_revision(batch_id):
     return jsonify({
         "id": cur.lastrowid, "newDraftId": new_draft_id,
         "action": action, "summary": summary, "detail": detail, "createdAt": ts,
+    }), 201
+
+
+# --------------------------------------------------------------------------- #
+# 上机工艺单
+# --------------------------------------------------------------------------- #
+STEP_KINDS = ("warp", "thread", "dent")
+
+
+def _json_text(obj, field):
+    """把请求中的 JSON 子对象序列化为存储文本；失败返回 None。"""
+    try:
+        return json.dumps(obj, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def step_signature(kind, label, detail):
+    """步骤签名：种类 + 区段内容。复制新版时用于判定原单步骤是否失效。"""
+    canon = json.dumps(detail, ensure_ascii=False, sort_keys=True)
+    return f"{kind}|{label}|{canon}"
+
+
+def row_to_sheet(r, step_count=0, done_count=0, stale_count=0):
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "draftId": r["draft_id"],
+        "draftName": r["draft_name"],
+        "fingerprint": r["fingerprint"],
+        "version": r["version"],
+        "parentId": r["parent_id"],
+        "status": r["status"],
+        "stepCount": step_count,
+        "doneCount": done_count,
+        "staleCount": stale_count,
+        "createdAt": r["created_at"],
+        "updatedAt": r["updated_at"],
+    }
+
+
+def row_to_step(s):
+    return {
+        "id": s["id"],
+        "index": s["step_index"],
+        "kind": s["kind"],
+        "label": s["label"],
+        "detail": json.loads(s["detail"]),
+        "done": bool(s["done"]),
+        "doneAt": s["done_at"],
+        "stale": bool(s["stale"]),
+    }
+
+
+def get_sheet_or_none(sheet_id):
+    return get_db().execute(
+        "SELECT * FROM loom_sheets WHERE id = ?", (sheet_id,)
+    ).fetchone()
+
+
+def _valid_steps(raw_steps):
+    """规整客户端生成的步骤序列；返回 (steps, error)。"""
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return None, "步骤序列缺失"
+    if len(raw_steps) > 2000:
+        return None, "步骤数量过多"
+    steps = []
+    for i, st in enumerate(raw_steps):
+        if not isinstance(st, dict):
+            return None, f"第 {i + 1} 个步骤格式错误"
+        kind = str(st.get("kind") or "")
+        if kind not in STEP_KINDS:
+            return None, f"第 {i + 1} 个步骤类型无效（warp/thread/dent）"
+        label = str(st.get("label") or "")[:300]
+        detail = st.get("detail")
+        if not isinstance(detail, dict):
+            return None, f"第 {i + 1} 个步骤缺少区段明细"
+        detail_text = _json_text(detail, "detail")
+        if detail_text is None:
+            return None, f"第 {i + 1} 个步骤明细无法序列化"
+        steps.append({"kind": kind, "label": label, "detail": detail,
+                      "detail_text": detail_text})
+    return steps, None
+
+
+def _sheet_payload(payload):
+    """校验并规整“冻结工艺单”请求体；返回 (fields, error)。"""
+    if not isinstance(payload, dict):
+        return None, "请求格式错误"
+    snap = payload.get("snapshot")
+    if not isinstance(snap, dict) or not isinstance(snap.get("threading"), list) \
+            or not isinstance(snap.get("treadling"), list):
+        return None, "快照缺少穿综 / 踩踏数据"
+    fields = {
+        "name": (str(payload.get("name") or "未命名工艺单")).strip()[:80] or "未命名工艺单",
+        "draftName": (str(payload.get("draftName") or "未保存草稿")).strip()[:80] or "未保存草稿",
+    }
+    draft_id = payload.get("draftId")
+    if draft_id is not None:
+        try:
+            draft_id = int(draft_id)
+        except (TypeError, ValueError):
+            draft_id = None
+    fields["draftId"] = draft_id
+    for key in ("snapshot", "params", "derived", "reedPlan"):
+        text = _json_text(payload.get(key), key)
+        if text is None or payload.get(key) is None:
+            return None, f"{key} 缺失或无法序列化"
+        fields[key] = text
+    fp = str(payload.get("fingerprint") or "")
+    fields["fingerprint"] = fp[:4000]
+    steps, err = _valid_steps(payload.get("steps"))
+    if err:
+        return None, err
+    fields["steps"] = steps
+    return fields, None
+
+
+def _insert_sheet(db, f, version, parent_id):
+    ts = now_iso()
+    cur = db.execute(
+        """
+        INSERT INTO loom_sheets
+          (name, draft_id, draft_name, snapshot, params, derived, reed_plan,
+           fingerprint, version, parent_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+        """,
+        (f["name"], f["draftId"], f["draftName"], f["snapshot"], f["params"],
+         f["derived"], f["reedPlan"], f["fingerprint"], version, parent_id, ts, ts),
+    )
+    sheet_id = cur.lastrowid
+    for i, st in enumerate(f["steps"]):
+        db.execute(
+            """
+            INSERT INTO loom_steps (sheet_id, step_index, kind, label, detail,
+                                    done, done_at, stale)
+            VALUES (?, ?, ?, ?, ?, 0, NULL, 0)
+            """,
+            (sheet_id, i, st["kind"], st["label"], st["detail_text"]),
+        )
+    return sheet_id, ts
+
+
+@app.get("/api/sheets")
+def list_sheets():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT s.*,
+          (SELECT COUNT(*) FROM loom_steps t WHERE t.sheet_id = s.id) AS step_count,
+          (SELECT COUNT(*) FROM loom_steps t WHERE t.sheet_id = s.id AND t.done = 1) AS done_count,
+          (SELECT COUNT(*) FROM loom_steps t WHERE t.sheet_id = s.id AND t.stale = 1) AS stale_count
+        FROM loom_sheets s ORDER BY s.updated_at DESC, s.id DESC
+        """
+    ).fetchall()
+    return jsonify([
+        row_to_sheet(r, r["step_count"], r["done_count"], r["stale_count"]) for r in rows
+    ])
+
+
+@app.post("/api/sheets")
+def create_sheet():
+    f, err = _sheet_payload(request.get_json(silent=True))
+    if err:
+        return jsonify(error=err), 400
+    db = get_db()
+    sheet_id, ts = _insert_sheet(db, f, version=1, parent_id=None)
+    db.commit()
+    row = get_sheet_or_none(sheet_id)
+    return jsonify(row_to_sheet(row, len(f["steps"]), 0, 0)), 201
+
+
+@app.get("/api/sheets/<int:sheet_id>")
+def get_sheet(sheet_id):
+    row = get_sheet_or_none(sheet_id)
+    if row is None:
+        return jsonify(error="工艺单不存在"), 404
+    steps = get_db().execute(
+        "SELECT * FROM loom_steps WHERE sheet_id = ? ORDER BY step_index", (sheet_id,)
+    ).fetchall()
+    try:
+        sheet = row_to_sheet(row, len(steps),
+                             sum(1 for s in steps if s["done"]),
+                             sum(1 for s in steps if s["stale"]))
+        sheet["snapshot"] = json.loads(row["snapshot"])
+        sheet["params"] = json.loads(row["params"])
+        sheet["derived"] = json.loads(row["derived"])
+        sheet["reedPlan"] = json.loads(row["reed_plan"])
+    except json.JSONDecodeError:
+        return jsonify(error="工艺单数据损坏"), 500
+    sheet["steps"] = [row_to_step(s) for s in steps]
+    return jsonify(sheet)
+
+
+@app.delete("/api/sheets/<int:sheet_id>")
+def delete_sheet(sheet_id):
+    db = get_db()
+    cur = db.execute("DELETE FROM loom_sheets WHERE id = ?", (sheet_id,))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify(error="工艺单不存在"), 404
+    return jsonify(ok=True)
+
+
+def _ordered_steps(db, sheet_id):
+    return db.execute(
+        "SELECT * FROM loom_steps WHERE sheet_id = ? ORDER BY step_index", (sheet_id,)
+    ).fetchall()
+
+
+@app.post("/api/sheets/<int:sheet_id>/steps/<int:step_id>/done")
+def done_step(sheet_id, step_id):
+    row = get_sheet_or_none(sheet_id)
+    if row is None:
+        return jsonify(error="工艺单不存在"), 404
+    db = get_db()
+    steps = _ordered_steps(db, sheet_id)
+    target = next((s for s in steps if s["id"] == step_id), None)
+    if target is None:
+        return jsonify(error="步骤不存在"), 404
+    if target["done"]:
+        return jsonify(error="该步骤已确认"), 409
+    if target["stale"]:
+        return jsonify(error="该步骤已失效（草稿或参数已出新版），请改用新版工艺单"), 409
+    # 顺序确认：前面不允许存在未确认步骤
+    if any(s["step_index"] < target["step_index"] and not s["done"] for s in steps):
+        return jsonify(error="请按顺序确认：前面还有未完成的步骤"), 409
+    ts = now_iso()
+    db.execute("UPDATE loom_steps SET done=1, done_at=? WHERE id=?", (ts, step_id))
+    db.execute("UPDATE loom_sheets SET updated_at=? WHERE id=?", (ts, sheet_id))
+    db.commit()
+    s = db.execute("SELECT * FROM loom_steps WHERE id=?", (step_id,)).fetchone()
+    return jsonify(row_to_step(s))
+
+
+@app.post("/api/sheets/<int:sheet_id>/steps/<int:step_id>/undo")
+def undo_step(sheet_id, step_id):
+    row = get_sheet_or_none(sheet_id)
+    if row is None:
+        return jsonify(error="工艺单不存在"), 404
+    db = get_db()
+    steps = _ordered_steps(db, sheet_id)
+    target = next((s for s in steps if s["id"] == step_id), None)
+    if target is None:
+        return jsonify(error="步骤不存在"), 404
+    if not target["done"]:
+        return jsonify(error="该步骤尚未确认"), 409
+    # 倒序撤回：后面不允许存在仍已确认的步骤
+    if any(s["step_index"] > target["step_index"] and s["done"] for s in steps):
+        return jsonify(error="只能倒序撤回：请先撤回后面的步骤"), 409
+    ts = now_iso()
+    db.execute("UPDATE loom_steps SET done=0, done_at=NULL WHERE id=?", (step_id,))
+    db.execute("UPDATE loom_sheets SET updated_at=? WHERE id=?", (ts, sheet_id))
+    db.commit()
+    s = db.execute("SELECT * FROM loom_steps WHERE id=?", (step_id,)).fetchone()
+    return jsonify(row_to_step(s))
+
+
+@app.post("/api/sheets/<int:sheet_id>/copy")
+def copy_sheet(sheet_id):
+    """复制新版：原单不改写；原单中与新单步骤签名不符的步骤标记为失效。"""
+    old = get_sheet_or_none(sheet_id)
+    if old is None:
+        return jsonify(error="工艺单不存在"), 404
+    f, err = _sheet_payload(request.get_json(silent=True))
+    if err:
+        return jsonify(error=err), 400
+    db = get_db()
+    new_id, ts = _insert_sheet(db, f, version=old["version"] + 1, parent_id=sheet_id)
+
+    # 新单步骤签名集合
+    new_sigs = {
+        step_signature(st["kind"], st["label"], st["detail"]) for st in f["steps"]
+    }
+    old_steps = _ordered_steps(db, sheet_id)
+    stale_count = 0
+    for s in old_steps:
+        try:
+            detail = json.loads(s["detail"])
+        except json.JSONDecodeError:
+            detail = {}
+        sig = step_signature(s["kind"], s["label"], detail)
+        if sig not in new_sigs and not s["stale"]:
+            db.execute("UPDATE loom_steps SET stale=1 WHERE id=?", (s["id"],))
+            stale_count += 1
+    db.execute("UPDATE loom_sheets SET updated_at=? WHERE id=?", (ts, sheet_id))
+    db.commit()
+    row = get_sheet_or_none(new_id)
+    return jsonify({
+        "sheet": row_to_sheet(row, len(f["steps"]), 0, 0),
+        "parentId": sheet_id,
+        "staleCount": stale_count,
     }), 201
 
 

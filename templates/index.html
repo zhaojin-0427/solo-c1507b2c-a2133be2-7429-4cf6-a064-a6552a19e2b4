@@ -23,6 +23,7 @@
       <button id="btnShuttle" class="btn" title="多梭布边计划：梭子配置 / 逐纬梭次 / 布边校验">🧵 多梭布边</button>
       <button id="btnDefect" class="btn" title="从当前草稿建立试织批次，在实物坐标上回标漏织 / 错踏 / 断经 / 浮线">🧷 试织回标</button>
       <button id="btnReverse" class="btn" title="从目标组织反推穿综 / 联结 / 踩踏">🎯 目标反推</button>
+      <button id="btnLoom" class="btn" title="从当前草稿冻结上机工艺单：整经根数 / 筘幅 / 经长 / 纬数 / 分色用纱量 / 穿筘方案与操作顺序">🧾 上机工艺单</button>
       <button id="btnPrint" class="btn" title="生成打印图 (Ctrl+P)">🖨 打印图</button>
     </div>
   </header>
@@ -458,6 +459,85 @@
     </div>
   </div>
 
+  <!-- ============================= 上机工艺单 ============================= -->
+  <div id="loomModal" class="modal hidden">
+    <div class="modal-card lo-card">
+      <div class="modal-head">
+        <h2>上机工艺单</h2>
+        <button class="btn close" data-close-lo>&times;</button>
+      </div>
+      <div class="lo-layout">
+        <!-- 左：工艺单列表 + 参数表单 -->
+        <div class="lo-col lo-col-left">
+          <div class="lo-sub">① 工艺单（冻结保存于 SQLite）</div>
+          <div class="lo-list-bar">
+            <button id="loNewSheet" class="btn tiny btn-primary">新建工艺单</button>
+            <span class="hint" id="loListHint"></span>
+          </div>
+          <div id="loSheetList" class="lo-sheet-list">
+            <p class="hint">读取中…</p>
+          </div>
+
+          <div class="lo-sub" style="margin-top:10px">② 工艺参数 <span id="loFormMode" class="lo-tag hidden">新版预览</span></div>
+          <div class="lo-form">
+            <label class="field"><span>工艺单名称</span>
+              <input id="loSheetName" type="text" maxlength="80" /></label>
+            <div class="lo-grid2">
+              <label class="field"><span>成品宽度（cm）</span>
+                <input id="loFinishW" type="number" min="1" max="1000" step="0.5" value="40" /></label>
+              <label class="field"><span>成品长度（cm）</span>
+                <input id="loFinishL" type="number" min="1" max="100000" step="1" value="200" /></label>
+              <label class="field"><span>经向缩率（%）</span>
+                <input id="loWarpShrink" type="number" min="0" max="90" step="0.5" value="8" /></label>
+              <label class="field"><span>纬向缩率（%）</span>
+                <input id="loWeftShrink" type="number" min="0" max="90" step="0.5" value="8" /></label>
+              <label class="field"><span>目标经密（根/cm）</span>
+                <input id="loWarpDensity" type="number" min="0.5" max="200" step="0.1" value="10" /></label>
+              <label class="field"><span>目标纬密（根/cm）</span>
+                <input id="loWeftDensity" type="number" min="0.5" max="200" step="0.1" value="10" /></label>
+              <label class="field"><span>筘齿密度（筘/cm）</span>
+                <input id="loReedDents" type="number" min="0.5" max="100" step="0.1" value="5" /></label>
+              <label class="field"><span>前废纱（cm）</span>
+                <input id="loWasteFront" type="number" min="0" max="2000" step="1" value="30" /></label>
+              <label class="field"><span>后废纱（cm）</span>
+                <input id="loWasteBack" type="number" min="0" max="2000" step="1" value="30" /></label>
+            </div>
+            <div class="lo-sub2">各色纱线单位长度重量（g/m）</div>
+            <div id="loYarnGrid" class="lo-yarn-grid"></div>
+            <button id="loCalc" class="btn btn-primary lo-calc">计算预览（不改写已冻结工艺单）</button>
+            <p class="hint" id="loFpHint"></p>
+          </div>
+        </div>
+
+        <!-- 中：推算结果 + 分色用量 + 穿筘方案 -->
+        <div class="lo-col lo-col-mid">
+          <div class="lo-sub">③ 推算结果与穿筘方案</div>
+          <div id="loMidHint" class="hint">填写左侧参数后点击“计算预览”；或从列表打开已冻结的工艺单。</div>
+          <div id="loDerived" class="lo-derived hidden"></div>
+          <div id="loUsage" class="lo-usage hidden"></div>
+          <div id="loReedBox" class="lo-reed hidden"></div>
+          <div id="loFreezeBar" class="lo-freeze-bar hidden">
+            <button id="loFreeze" class="btn btn-primary">冻结并建立工艺单</button>
+            <span class="hint">冻结后参数与步骤不再被草稿改动影响。</span>
+          </div>
+        </div>
+
+        <!-- 右：操作顺序 -->
+        <div class="lo-col lo-col-right">
+          <div class="lo-sub">④ 操作顺序（按序确认，仅可倒序撤回）</div>
+          <div id="loStaleBar" class="lo-stale-bar hidden"></div>
+          <div id="loStepList" class="lo-step-list">
+            <p class="hint">打开工艺单后在此逐项确认；勾选步骤可在主图板定位对应经线。</p>
+          </div>
+          <div class="lo-footer">
+            <button id="loPrint" class="btn tiny" disabled>🖨 打印工艺单</button>
+            <button id="loDelete" class="btn tiny" disabled>删除本单</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= Toast ============================= -->
   <div id="toast" class="toast hidden"></div>
 
@@ -479,12 +559,24 @@
     <div id="dfPrintLegend" class="print-legend"></div>
   </section>
 
+  <!-- ============================= 上机工艺单打印区 ============================= -->
+  <section id="loPrintSheet" class="print-sheet">
+    <h1 id="loPrintTitle"></h1>
+    <div id="loPrintMeta" class="print-meta"></div>
+    <h2 class="print-h2">分色用纱量</h2>
+    <div id="loPrintUsage" class="print-legend lo-print-cols1"></div>
+    <h2 class="print-h2">穿筘方案与操作顺序</h2>
+    <div id="loPrintSteps" class="print-legend lo-print-cols1"></div>
+  </section>
+
   <script src="/static/engine.js"></script>
   <script src="/static/defect-core.js"></script>
+  <script src="/static/loom-core.js"></script>
   <script src="/static/reverse.js"></script>
   <script src="/static/reverse-ui.js"></script>
   <script src="/static/shuttle-ui.js"></script>
   <script src="/static/defect-ui.js"></script>
+  <script src="/static/loom-ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

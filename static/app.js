@@ -495,7 +495,8 @@ function drawLocateFlash(ctx, now) {
   if (f.r < 0 || f.c < 0) {
     x = f.c < 0 ? R.x0 : R.x0 + f.c * CELL;
     y = f.r < 0 ? R.y0 : R.y0 + f.r * CELL;
-    w = f.c < 0 ? R.w : CELL;
+    // c1：连续区段定位（如工艺单步骤对应的经线范围）
+    w = f.c < 0 ? R.w : (f.c1 != null && f.c1 > f.c ? (f.c1 - f.c + 1) * CELL : CELL);
     h = f.r < 0 ? R.h : CELL;
   } else {
     x = R.x0 + f.c * CELL; y = R.y0 + f.r * CELL; w = h = CELL;
@@ -1298,9 +1299,9 @@ function focusIssue(i) {
 
 /* ------------------------------- 外部模块定位 ------------------------- */
 /**
- * 供“试织缺陷回标”等模块调用：关闭弹窗后在主图板定位组织位置。
- * loc: { grid:'threading'|'tieup'|'treadling'|'drawdown', r, c }
- * r 或 c 为 -1 / null 表示整列 / 整行高亮。
+ * 供“试织缺陷回标”“上机工艺单”等模块调用：关闭弹窗后在主图板定位组织位置。
+ * loc: { grid:'threading'|'tieup'|'treadling'|'drawdown', r, c, c1? }
+ * r 或 c 为 -1 / null 表示整列 / 整行高亮；c1 表示 c..c1 的连续列区段。
  */
 function locateCell(loc) {
   const L = state.layout;
@@ -1309,10 +1310,14 @@ function locateCell(loc) {
   // 关闭所有模态
   $$('.modal').forEach(m => m.classList.add('hidden'));
   state.activeIssue = -1;
+  const c0 = loc.c ?? -1;
+  const c1 = (loc.c1 != null && c0 >= 0) ? Math.max(c0, Math.min(loc.c1, (R.cols || 1) - 1)) : null;
   state.locateFlash = {
-    grid: loc.grid, r: loc.r ?? -1, c: loc.c ?? -1, until: performance.now() + 4000,
+    grid: loc.grid, r: loc.r ?? -1, c: c0, c1, until: performance.now() + 4000,
   };
-  const cx = loc.c != null && loc.c >= 0 ? R.x0 + loc.c * CELL + CELL / 2 : R.x0 + R.w / 2;
+  const cx = c0 >= 0
+    ? R.x0 + (c1 != null ? (c0 + c1 + 1) / 2 : c0 + 0.5) * CELL
+    : R.x0 + R.w / 2;
   const cy = loc.r != null && loc.r >= 0 ? R.y0 + loc.r * CELL + CELL / 2 : R.y0 + R.h / 2;
   const vp = $('#viewport');
   vp.scrollTo({
