@@ -147,6 +147,47 @@ const approx = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('整经段连续覆盖', warpSteps.every((s, i) => s.detail.from === i * 4 + 1 && s.detail.to === (i + 1) * 4));
   check('跨段色号交替', warpSteps[0].detail.color === 0 && warpSteps[1].detail.color === 1);
 
+  // 交替色经（用户场景：201cm × 10 根/cm → 2012 根）→ 退化为一段色序循环
+  const dAlt = Engine.defaultDraft();
+  dAlt.warpColor = Array.from({ length: 16 }, (_, i) => i % 2);   // [0,1] 交替，周期 2
+  const planAlt = LC.derivePlan(Engine, dAlt, {
+    finishWidth: 201, warpDensity: 10, weftDensity: 10,
+    warpShrink: 8, weftShrink: 8, wasteFront: 30, wasteBack: 30,
+  });
+  check('交替色经：201cm×10 → 整经 2012 根', planAlt.totalEnds === 2012, planAlt.totalEnds);
+  const stepsAlt = LC.buildSteps(dAlt, planAlt, [2]);
+  const warpAlt = stepsAlt.filter(s => s.kind === 'warp');
+  check('交替色经 → 仅 1 段色序循环（而非 2012 段）', warpAlt.length === 1, warpAlt.length);
+  check('色序循环段带 cycle 明细', Array.isArray(warpAlt[0].detail.cycle) &&
+    warpAlt[0].detail.cycle.join(',') === '0,1' && warpAlt[0].detail.times === 1006, warpAlt[0].detail);
+  check('色序循环覆盖整幅', warpAlt[0].detail.from === 1 && warpAlt[0].detail.to === 2012);
+  check('总步骤 3 步（可正常冻结）', stepsAlt.length === 3, stepsAlt.length);
+  check('步骤文本为“色序循环”', warpAlt[0].label.includes('色序循环'), warpAlt[0].label);
+
+  // 段数阈值：每周期 100 个单根色段（周期 100）→ 超过 64 段也退化为循环段
+  const dMany = Engine.defaultDraft();
+  const manyColors = Array.from({ length: 100 }, (_, i) => (i * 7) % 8);
+  dMany.warpColor = manyColors.concat(manyColors).slice(0, 16);  // 草稿 16 根内无重复周期
+  // 直接构造 plan（整经 1000 根、色经周期 16）
+  const planMany = { totalEnds: 1000, warpColorP: 16, threadingP: 4 };
+  const stepsMany = LC.buildSteps(dMany, planMany, [2]);
+  const warpMany = stepsMany.filter(s => s.kind === 'warp');
+  check('细碎色序（16 根无同色相邻）→ 循环段', warpMany.length === 1 && Array.isArray(warpMany[0].detail.cycle),
+    warpMany.length);
+  check('循环段周期 16', warpMany[0].detail.cycle.length === 16, warpMany[0].detail.cycle);
+
+  // 段数 ≤ 阈值时保留连续段（双色大块：48 根 = 3 次循环 × 2 段 = 6 段）
+  const dBlock = Engine.defaultDraft();
+  dBlock.warpColor = Array.from({ length: 16 }, (_, i) => (i < 8 ? 0 : 1));
+  const planBlock = LC.derivePlan(Engine, dBlock, {
+    finishWidth: 4, warpDensity: 10, weftDensity: 10,
+    warpShrink: 0, weftShrink: 0, wasteFront: 0, wasteBack: 0,
+  });
+  const warpBlock = LC.buildSteps(dBlock, planBlock, [2]).filter(s => s.kind === 'warp');
+  check('大块双色 → 保留连续段（3 循环 × 2 段 = 6 段）', warpBlock.length === 6 &&
+    warpBlock[0].detail.color === 0 && warpBlock[1].detail.color === 1, warpBlock.length);
+  check('连续段各 8 根', warpBlock.every(s => s.detail.count === 8), warpBlock.map(s => s.detail.count));
+
   // 末筘不足：33 根按每筘 2 → 17 筘，末筘 1 根
   const d3 = Engine.defaultDraft();
   const plan3 = LC.derivePlan(Engine, d3, {

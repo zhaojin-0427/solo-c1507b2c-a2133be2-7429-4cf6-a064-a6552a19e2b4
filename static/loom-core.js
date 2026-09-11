@@ -252,10 +252,15 @@ const LoomCore = (() => {
   /**
    * 生成操作步骤（连续区段压缩）：
    *   ① 整经色序：经纱色带循环平铺到整经根数后按同色连续段压缩；
+   *      段数过多（交替 / 细小花型）时退化为一段“色序循环”指令，
+   *      避免每根经线各成一步；
    *   ② 穿综：穿综最小循环平铺，整幅为一段循环指令；
    *   ③ 穿筘：所选穿筘序列循环，整幅一段（末筘不足单独注明）。
    * 步骤：{ index, kind:'warp'|'thread'|'dent', label, detail:{from,to,…} }
    */
+  /** 整经 RLE 段数上限：超过则改用色序循环段（交替色经每根一段会爆步骤数） */
+  const WARP_RLE_MAX = 64;
+
   function buildSteps(snapshot, plan, reedSeq) {
     const E = plan.totalEnds;
     const palette = snapshot.palette || [];
@@ -265,20 +270,41 @@ const LoomCore = (() => {
     // ① 整经色序段
     const wcp = Math.max(1, plan.warpColorP || 1);
     const colorAt = (e) => (wc.length ? wc[e % wc.length] : 0) | 0;
+    const colorName = (c) => `${c + 1}${(palette[c] || {}).name || ''}`;
+    // 同色连续段（0 基闭区间）
+    const rleSegs = [];
     let start = 0;
     for (let e = 1; e <= E; e++) {
       const cur = e < E ? colorAt(e) : -1;
       if (cur !== colorAt(start)) {
-        const c = colorAt(start);
-        const pal = palette[c] || {};
-        const from = start + 1, to = e;
-        steps.push({
-          kind: 'warp',
-          label: `整经：第 ${from}–${to} 根 · 色号${c + 1} ${pal.name || ''} ×${to - from + 1} 根`,
-          detail: { from, to, color: c, count: to - from + 1 },
-        });
+        rleSegs.push([start, e - 1]);
         start = e;
       }
+    }
+    if (rleSegs.length <= WARP_RLE_MAX || wcp >= E) {
+      // 段数不多（条带 / 大块色），或整幅无更小周期：按连续段
+      rleSegs.forEach(([s0, e0]) => {
+        const c = colorAt(s0);
+        const from = s0 + 1, to = e0 + 1;
+        steps.push({
+          kind: 'warp',
+          label: `整经：第 ${from}–${to} 根 · 色号${colorName(c)} ×${to - from + 1} 根`,
+          detail: { from, to, color: c, count: to - from + 1 },
+        });
+      });
+    } else {
+      // 交替 / 细小花型：整幅一段色序循环（E 必为色经周期整数倍）
+      const cycle = [];
+      for (let i = 0; i < wcp; i++) cycle.push(colorAt(i));
+      const times = Math.round(E / wcp);
+      const cycShow = cycle.length > 12
+        ? cycle.slice(0, 12).map(colorName).join(' ') + ' …'
+        : cycle.map(colorName).join(' ');
+      steps.push({
+        kind: 'warp',
+        label: `整经：第 1–${E} 根 · 色序循环 [${cycShow}] ×${times} 次`,
+        detail: { from: 1, to: E, cycle, times },
+      });
     }
 
     // ② 穿综段（最小循环平铺；不规则穿综的循环节即整幅草稿）
@@ -331,7 +357,7 @@ const LoomCore = (() => {
     normalizeParams, normalizeYarnGpm, loomWarpDensity,
     derivePlan,
     dentSequence, discrepancy, minPeriodLen, searchReedPlans, reedNote,
-    dentWalk, buildSteps,
+    dentWalk, buildSteps, WARP_RLE_MAX,
     fingerprint,
   };
 })();

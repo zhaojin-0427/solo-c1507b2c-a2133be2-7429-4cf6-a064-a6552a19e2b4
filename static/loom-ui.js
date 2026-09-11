@@ -20,7 +20,7 @@
   const fmtG = (g) => g >= 1000 ? (g / 1000).toFixed(2) + ' kg' : fmt1(g) + ' g';
 
   const KIND_NAMES = { warp: '整经', thread: '穿综', dent: '穿筘' };
-  const EXPAND_CAP = 400;   // 展开到每根经线时的渲染上限
+  const EXPAND_CAP = 10000;   // 展开到每根经线时的渲染上限（超出仅截断显示）
 
   const S = {
     open: false,
@@ -422,7 +422,7 @@
       cb.disabled = st.done ? !canUndo : (!canDone || st.stale);
       cb.title = st.stale && !st.done ? '该步骤已失效，请改用新版工艺单'
         : st.done ? (canUndo ? '撤回该步骤' : '只能倒序撤回：请先撤回后面的步骤')
-        : (canDone ? '确认该步骤' : '请按顺序确认：前面还有未完成的步骤');
+        : (canDone ? '确认该步骤并在主图板定位对应经线' : '请按顺序确认：前面还有未完成的步骤');
       cb.addEventListener('change', () => toggleStep(st, cb.checked, cb));
 
       const no = document.createElement('span');
@@ -489,10 +489,19 @@
     let total = 0;
     if (st.kind === 'warp') {
       total = d.to - d.from + 1;
-      const pal = palette[d.color] || {};
       const n = Math.min(total, EXPAND_CAP);
-      for (let e = 0; e < n; e++) {
-        rows += `<tr><td>第 ${d.from + e} 根</td><td>色号${d.color + 1} ${escapeHtml(pal.name || '')}</td></tr>`;
+      if (Array.isArray(d.cycle)) {
+        // 色序循环段：逐根按循环相位取色
+        for (let e = 0; e < n; e++) {
+          const c = d.cycle.length ? d.cycle[e % d.cycle.length] : 0;
+          const pal = palette[c] || {};
+          rows += `<tr><td>第 ${d.from + e} 根</td><td>色号${c + 1} ${escapeHtml(pal.name || '')}</td></tr>`;
+        }
+      } else {
+        const pal = palette[d.color] || {};
+        for (let e = 0; e < n; e++) {
+          rows += `<tr><td>第 ${d.from + e} 根</td><td>色号${d.color + 1} ${escapeHtml(pal.name || '')}</td></tr>`;
+        }
       }
     } else if (st.kind === 'thread') {
       const cyc = d.cycle || [];
@@ -525,6 +534,8 @@
       cur.doneCount = cur.steps.filter(s => s.done).length;
       renderSteps();
       refreshList();
+      // 勾选确认 → 在主图板定位该步骤对应的经线（弹窗随之关闭）
+      if (wantDone) locateStep(updated);
     } catch (e) {
       cbEl.checked = !wantDone;
       toast(e.message || '操作失败', 2600);

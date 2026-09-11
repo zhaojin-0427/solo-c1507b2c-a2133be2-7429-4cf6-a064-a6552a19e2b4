@@ -203,31 +203,47 @@ try {
   const sheetId = API.state.current.id;
   const steps = API.state.current.steps;
 
-  /* ⑤ 顺序确认：跳步被拒（mock 409 → checkbox 回退） */
+  /* ⑤ 顺序确认：跳步被拒（mock 409 → checkbox 回退）；确认即定位画布 */
   const boxes = $$('#loStepList .lo-step input[type=checkbox]');
   check('第 2 步复选框被禁用（前序未完成）', boxes[1].disabled === true);
   check('第 1 步可确认', boxes[0].disabled === false);
   boxes[0].click();
   await new Promise(r => setTimeout(r, 30));
   check('确认第 1 步后进度 1', API.state.current.steps[0].done === true);
+  check('勾选确认触发画布定位（弹窗关闭）', $('#loomModal').classList.contains('hidden'));
+  check('定位闪烁指向穿综区首列', (() => {
+    const f = w.__loom.state.locateFlash;
+    return !!f && f.grid === 'threading' && f.c === 0;
+  })(), w.__loom.state.locateFlash);
+
+  API.open();   // 重新打开继续操作
+  await new Promise(r => setTimeout(r, 30));
   const boxes2 = $$('#loStepList .lo-step input[type=checkbox]');
   check('确认后第 2 步解锁', boxes2[1].disabled === false);
   check('已确认步骤可撤回（是最后已确认项）', boxes2[0].disabled === false);
   boxes2[1].click();
   await new Promise(r => setTimeout(r, 30));
   check('确认第 2 步后进度 2', API.state.current.steps.filter(s => s.done).length === 2);
+  check('第 2 步确认同样触发定位', $('#loomModal').classList.contains('hidden') &&
+    !!w.__loom.state.locateFlash);
+
+  API.open();
+  await new Promise(r => setTimeout(r, 30));
   const boxes3 = $$('#loStepList .lo-step input[type=checkbox]');
   check('第 1 步不可撤回（须先撤后面）', boxes3[0].disabled === true);
   check('第 2 步可撤回', boxes3[1].disabled === false);
-  boxes3[1].click();   // 倒序撤回第 2 步
+  boxes3[1].click();   // 倒序撤回第 2 步（撤回不触发定位）
   await new Promise(r => setTimeout(r, 30));
   check('撤回后进度回到 1', API.state.current.steps.filter(s => s.done).length === 1);
+  check('撤回不关闭弹窗', !$('#loomModal').classList.contains('hidden'));
 
-  /* ⑥ 展开到每根经线 */
+  /* ⑥ 展开到每根经线（400 根区段完整显示） */
   $$('#loStepList .lo-step-acts .btn')[0].click();   // 第 1 步“展开”
   await new Promise(r => setTimeout(r, 10));
   check('展开显示每根经线', $('#loStepList .lo-expand').textContent.includes('第 1 根'));
-  check('展开行数受上限保护', $$('#loStepList .lo-expand tr').length <= 401);
+  check('400 根区段完整展开（不再截断到 400）', $$('#loStepList .lo-expand tr').length === 400,
+    $$('#loStepList .lo-expand tr').length);
+  check('展开末行为第 400 根', $('#loStepList .lo-expand').textContent.includes('第 400 根'));
 
   /* ⑦ 定位到主图板 */
   API.locateStep(API.state.current.steps[0]);
@@ -282,6 +298,41 @@ try {
   await API.deleteSheet();
   await new Promise(r => setTimeout(r, 30));
   check('删除后回到列表', API.state.current === null);
+
+  /* ⑫ 用户场景：201cm × 10 根/cm + 交替色经 → 2012 根正常冻结 */
+  w.loadDraft(w.__loom.Engine.defaultDraft(), '交替测试', null);   // 恢复干净草稿（⑧ 曾改穿综）
+  w.__loom.state.draft.warpColor = w.__loom.state.draft.warpColor.map((_, i) => i % 2);
+  w.__loom.afterEdit();
+  $('#loNewSheet').click();
+  await new Promise(r => setTimeout(r, 20));
+  $('#loFinishW').value = '201';
+  $('#loWarpDensity').value = '10';
+  API.calcPreview();
+  await new Promise(r => setTimeout(r, 10));
+  check('交替色经预览整经 2012 根', API.state.preview.plan.totalEnds === 2012,
+    API.state.preview.plan.totalEnds);
+  check('步骤压缩为 3 步（不触发“步骤数量过多”）', API.previewSteps().length === 3,
+    API.previewSteps().length);
+  check('整经步骤为色序循环段', API.previewSteps()[0].label.includes('色序循环'),
+    API.previewSteps()[0].label);
+  $('#loSheetName').value = '交替色经 201';
+  await API.freeze();
+  await new Promise(r => setTimeout(r, 30));
+  check('2012 根工艺单冻结成功', !!API.state.current && API.state.current.name === '交替色经 201');
+  check('冻结后步骤为 3 步', API.state.current.steps.length === 3, API.state.current.steps.length);
+  // 展开色序循环段：2012 根逐根完整显示
+  $$('#loStepList .lo-step-acts .btn')[0].click();
+  await new Promise(r => setTimeout(r, 20));
+  check('2012 根区段完整展开', $$('#loStepList .lo-expand tr').length === 2012,
+    $$('#loStepList .lo-expand tr').length);
+  check('展开末行为第 2012 根', $('#loStepList .lo-expand').textContent.includes('第 2012 根'));
+  check('展开行色号交替', (() => {
+    const tds = $$('#loStepList .lo-expand tr td:last-child');
+    return tds[0].textContent.includes('色号1') && tds[1].textContent.includes('色号2');
+  })());
+  // 清理
+  await API.deleteSheet();
+  await new Promise(r => setTimeout(r, 20));
 
   check('无 window 错误', errors.length === 0, errors);
 
