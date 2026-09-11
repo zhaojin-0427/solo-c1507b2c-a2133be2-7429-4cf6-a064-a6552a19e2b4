@@ -10,6 +10,16 @@
  *   warpColor: [ends]                 色号索引
  *   weftColor:[picks]                 色号索引
  *   palette:   [{name, hex}]
+ *   shuttles:  多梭布边计划（可缺省，旧草稿没有该字段）
+ *     {
+ *       count: 2..8,                  梭子把数
+ *       colors: [count]               每把梭子的纱色（色号索引）
+ *       home:   [count]               每把梭子的初始停放边 'L'|'R'
+ *       parkLimit: int,               停放浮线上限（纬）
+ *       picks:  [picks]               null | { s:梭子号, enter:'L'|'R' 入梭边,
+ *                                      join:null|'wrap'包绕|'lock'交锁|'cut'剪断重接 }
+ *       locked: [picks]               已织纬锁定（批量操作与建议不得改动）
+ *     }
  * }
  *
  * drawdown[p][e]：1=经线在上（正面见经色），0=纬线在上（正面见纬色），
@@ -46,6 +56,7 @@ const Engine = (() => {
       warpColor: new Array(ends).fill(0),
       weftColor: new Array(picks).fill(1),
       palette: PALETTE.map(c => ({ ...c })),
+      shuttles: defaultShuttles(picks),
     };
   }
 
@@ -58,7 +69,52 @@ const Engine = (() => {
       warpColor: new Array(ends).fill(0),
       weftColor: new Array(picks).fill(1),
       palette: PALETTE.map(c => ({ ...c })),
+      shuttles: defaultShuttles(picks),
     };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 多梭布边：数据规整
+   * ------------------------------------------------------------------ */
+  function clampInt(v, lo, hi, dflt) {
+    v = parseInt(v, 10);
+    if (!Number.isFinite(v)) return dflt;
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  /** 默认多梭计划：2 把梭子、全部纬未指定、无锁定（即功能未启用，不产生校验）。 */
+  function defaultShuttles(picks) {
+    return normalizeShuttles(null, picks);
+  }
+
+  /**
+   * 把（可能缺失/残缺的）多梭数据规整为完整结构。
+   * 旧草稿没有 shuttles 字段时传入 null，得到一份“未启用”的默认计划。
+   */
+  function normalizeShuttles(sh, picks) {
+    const P = Math.max(0, picks | 0);
+    const count = clampInt(sh && sh.count, 2, 8, 2);
+    const parkLimit = clampInt(sh && sh.parkLimit, 1, 200, 8);
+    const colors = [], home = [];
+    for (let k = 0; k < count; k++) {
+      const c = sh && sh.colors && sh.colors[k];
+      colors[k] = Number.isInteger(c) && c >= 0 ? c : (k % 7) + 1;
+      const hv = sh && sh.home && sh.home[k];
+      home[k] = (hv === 'L' || hv === 'R') ? hv : (k % 2 ? 'R' : 'L');
+    }
+    const pickArr = [], locked = [];
+    for (let p = 0; p < P; p++) {
+      const a = sh && sh.picks && sh.picks[p];
+      if (a && Number.isInteger(a.s) && a.s >= 0 && a.s < count) {
+        pickArr[p] = {
+          s: a.s,
+          enter: a.enter === 'R' ? 'R' : 'L',
+          join: (a.join === 'wrap' || a.join === 'lock' || a.join === 'cut') ? a.join : null,
+        };
+      } else pickArr[p] = null;
+      locked[p] = !!(sh && sh.locked && sh.locked[p]);
+    }
+    return { count, colors, home, parkLimit, picks: pickArr, locked };
   }
 
   function cloneDraft(d) {
@@ -70,6 +126,13 @@ const Engine = (() => {
       weftColor: d.weftColor.slice(),
       tieup: d.tieup.map(row => row.slice()),
       palette: d.palette.map(c => ({ ...c })),
+      shuttles: d.shuttles ? {
+        ...d.shuttles,
+        colors: d.shuttles.colors.slice(),
+        home: d.shuttles.home.slice(),
+        picks: d.shuttles.picks.map(a => (a ? { ...a } : null)),
+        locked: d.shuttles.locked.slice(),
+      } : d.shuttles,
     };
   }
 
@@ -82,6 +145,10 @@ const Engine = (() => {
     nd.treadling = resize1D(d.treadling, picks, (i) => i < treadles ? i % treadles : 0);
     nd.warpColor = resize1D(d.warpColor, ends, () => 0);
     nd.weftColor = resize1D(d.weftColor, picks, () => 1);
+    if (nd.shuttles) {
+      nd.shuttles.picks = resize1D(d.shuttles.picks, picks, () => null);
+      nd.shuttles.locked = resize1D(d.shuttles.locked, picks, () => false);
+    }
 
     nd.tieup = Array.from({ length: shafts }, (_, s) =>
       Array.from({ length: treadles }, (_, t) =>
@@ -294,12 +361,124 @@ const Engine = (() => {
   }
 
   /* ------------------------------------------------------------------ *
+   * 多梭布边路径推演
+   *
+   * 依据每把梭子的上次离场边（初始为停放边）逐纬推演：
+   *   - 入梭边必须等于该梭当前停放边，否则为「入梭边不一致」；
+   *   - 相邻两纬换梭时，新梭入梭一侧需要交接方式（包绕/交锁/剪断重接）；
+   *   - 梭子离场后沿布边停放，再次入梭的纬距超过 parkLimit 为「停放浮线超限」，
+   *     该纬交接方式为「剪断重接」时浮线被剪断，不计超限。
+   *
+   * 返回 null（无多梭数据）或：
+   * {
+   *   active,            是否有任一纬指定了梭子（否则不做布边校验）
+   *   rows: [picks]      null | { pick, shuttle, enter, exit, join, mismatch,
+   *                               changed, prevShuttle, floatLen, floatEdge, floatFrom }
+   *   parked: [picks]    每纬织完后各梭停放边快照
+   *   home:   [count]    初始停放边
+   * }
+   * ------------------------------------------------------------------ */
+  function shuttlePath(d) {
+    const sh = d.shuttles;
+    if (!sh || !Array.isArray(sh.picks)) return null;
+    const P = d.picks, N = sh.count;
+    const home = [];
+    for (let k = 0; k < N; k++) home[k] = sh.home[k] === 'R' ? 'R' : 'L';
+    const edges = home.slice();
+    const used = new Array(N).fill(false);
+    const lastExit = new Array(N).fill(-1);
+    const rows = new Array(P).fill(null);
+    const parked = new Array(P).fill(null);
+    let active = false, prevS = null;
+
+    for (let p = 0; p < P; p++) {
+      const a = sh.picks[p];
+      if (a && Number.isInteger(a.s) && a.s >= 0 && a.s < N) {
+        active = true;
+        const k = a.s;
+        const enter = a.enter === 'R' ? 'R' : 'L';
+        const exit = enter === 'L' ? 'R' : 'L';
+        rows[p] = {
+          pick: p, shuttle: k, enter, exit,
+          join: a.join || null,
+          mismatch: enter !== edges[k],
+          changed: prevS !== null && prevS !== k,
+          prevShuttle: prevS,
+          floatLen: used[k] ? p - lastExit[k] : 0,
+          floatEdge: edges[k],
+          floatFrom: lastExit[k],
+        };
+        edges[k] = exit;
+        used[k] = true; lastExit[k] = p;
+        prevS = k;
+      } else {
+        prevS = null;
+      }
+      parked[p] = edges.slice();
+    }
+    return { active, rows, parked, home };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 多梭布边修改建议
+   *
+   * 逐纬顺序推演并生成修复建议（锁定纬只列入 skipped，不生成可应用项）：
+   *   - 入梭边不一致   → 顺边（enter 改为推演停放边）
+   *   - 停放浮线超限   → 剪断重接（join='cut'）
+   *   - 换梭未交接     → 包绕 / 交锁（join=prefer）
+   * 入梭边修正会即时代入后续推演，保证一串不一致能被顺序理顺。
+   * 返回 { changes:[{pick,shuttle,enter,join,reasons}], skipped:[同构] }
+   * ------------------------------------------------------------------ */
+  function shuttleSuggest(d, prefer) {
+    const sh = d.shuttles;
+    const empty = { changes: [], skipped: [] };
+    if (!sh || !Array.isArray(sh.picks)) return empty;
+    const N = sh.count;
+    const edges = [];
+    for (let k = 0; k < N; k++) edges[k] = sh.home[k] === 'R' ? 'R' : 'L';
+    const used = new Array(N).fill(false);
+    const lastExit = new Array(N).fill(-1);
+    const changes = [], skipped = [];
+    let prevS = null;
+
+    for (let p = 0; p < d.picks; p++) {
+      const a = sh.picks[p];
+      if (!a || !Number.isInteger(a.s) || a.s < 0 || a.s >= N) { prevS = null; continue; }
+      const k = a.s, locked = !!sh.locked[p];
+      const fix = { pick: p, shuttle: k, enter: null, join: null, reasons: [] };
+
+      if ((a.enter === 'R' ? 'R' : 'L') !== edges[k]) {
+        fix.enter = edges[k];
+        fix.reasons.push(`入梭边顺为${edges[k] === 'L' ? '左' : '右'}边`);
+      }
+      if (used[k] && p - lastExit[k] > sh.parkLimit && a.join !== 'cut') {
+        fix.join = 'cut';
+        fix.reasons.push(`停放浮线 ${p - lastExit[k]} 纬超限（${sh.parkLimit}），剪断重接`);
+      }
+      if (prevS !== null && prevS !== k && !a.join && !fix.join) {
+        fix.join = prefer === 'lock' ? 'lock' : 'wrap';
+        fix.reasons.push(prefer === 'lock' ? '换梭交接（交锁）' : '换梭交接（包绕）');
+      }
+      if (fix.reasons.length) (locked ? skipped : changes).push(fix);
+
+      // 用修正后的入梭边继续推演；锁定纬按原样织入
+      const enterSim = locked ? (a.enter === 'R' ? 'R' : 'L')
+                              : (fix.enter || (a.enter === 'R' ? 'R' : 'L'));
+      edges[k] = enterSim === 'L' ? 'R' : 'L';
+      used[k] = true; lastExit[k] = p;
+      prevS = k;
+    }
+    return { changes, skipped };
+  }
+
+  /* ------------------------------------------------------------------ *
    * 校验
    * issue: { level:'error'|'warn', code, msg, loc:[{grid,r,c}...] }
    * ------------------------------------------------------------------ */
-  function validate(d, derived, fl) {
+  function validate(d, derived, fl, sp) {
     const issues = [];
     const { shafts, treadles, ends, picks } = d;
+    if (sp === undefined) sp = shuttlePath(d);
 
     // 1) 穿综越界
     const badEnds = [];
@@ -411,6 +590,56 @@ const Engine = (() => {
       });
     });
 
+    // 7) 多梭布边路径（仅当至少一纬指定了梭子才启用）
+    if (sp && sp.active) {
+      const sh = d.shuttles;
+      const edgeCol = (e) => e === 'L' ? 0 : ends - 1;
+      const edgeName = (e) => e === 'L' ? '左' : '右';
+      const unassigned = [];
+      for (let p = 0; p < picks; p++) {
+        const r = sp.rows[p];
+        if (!r) { unassigned.push(p); continue; }
+        // 入梭边与停放边不一致
+        if (r.mismatch) {
+          issues.push({
+            level: 'error', code: 'shuttle-entry',
+            msg: `第 ${p + 1} 纬：梭子 ${r.shuttle + 1} 停在${edgeName(r.exit)}布边，` +
+                 `却设为从${edgeName(r.enter)}边入梭`,
+            loc: [{ grid: 'drawdown', r: p, c: edgeCol(r.enter) }],
+          });
+        }
+        // 换梭未交接
+        if (r.changed && !r.join) {
+          const prev = sp.rows[p - 1];
+          const loc = [{ grid: 'drawdown', r: p, c: edgeCol(r.enter) }];
+          if (prev) loc.push({ grid: 'drawdown', r: p - 1, c: edgeCol(prev.exit) });
+          issues.push({
+            level: 'warn', code: 'shuttle-join',
+            msg: `第 ${p + 1} 纬换梭（梭${r.prevShuttle + 1}→梭${r.shuttle + 1}），` +
+                 `${edgeName(r.enter)}布边纬纱未交接`,
+            loc,
+          });
+        }
+        // 停放浮线超限
+        if (r.floatLen > sh.parkLimit && r.join !== 'cut') {
+          issues.push({
+            level: 'error', code: 'shuttle-float',
+            msg: `梭子 ${r.shuttle + 1} 自第 ${r.floatFrom + 1} 纬起沿${edgeName(r.floatEdge)}布边` +
+                 `停放 ${r.floatLen} 纬（限值 ${sh.parkLimit}）`,
+            loc: Array.from({ length: r.floatLen + 1 }, (_, i) =>
+              ({ grid: 'drawdown', r: r.floatFrom + i, c: edgeCol(r.floatEdge) })),
+          });
+        }
+      }
+      if (unassigned.length) {
+        issues.push({
+          level: 'warn', code: 'shuttle-unassigned',
+          msg: `${unassigned.length} 纬未指定梭子（多梭计划不完整）`,
+          loc: unassigned.map(p => ({ grid: 'drawdown', r: p, c: 0 })),
+        });
+      }
+    }
+
     const errors = issues.filter(i => i.level === 'error').length;
     const warns = issues.length - errors;
     return { issues, errors, warns };
@@ -478,15 +707,17 @@ const Engine = (() => {
     const derived = derive(d);
     const fl = floats(d, derived);
     const rep = repeats(d, derived);
-    const val = validate(d, derived, fl);
+    const sp = shuttlePath(d);
+    const val = validate(d, derived, fl, sp);
     const st = stats(d, derived, fl, rep);
-    return { derived, fl, rep, validation: val, stats: st };
+    return { derived, fl, rep, shuttle: sp, validation: val, stats: st };
   }
 
   return {
     PALETTE, defaultDraft, blankDraft, cloneDraft, resize,
     derive, colorGrid, repeats, floats, validate, stats, compare, analyze,
     period1D, gcd, lcm,
+    defaultShuttles, normalizeShuttles, shuttlePath, shuttleSuggest,
   };
 })();
 

@@ -20,6 +20,7 @@
       <button id="btnRedo" class="btn" title="重做 Ctrl+Y">↷ 重做</button>
       <button id="btnSave" class="btn btn-primary" title="保存到本地 SQLite (Ctrl+S)">💾 保存草稿</button>
       <button id="btnOpen" class="btn" title="打开已保存草稿">📂 草稿箱</button>
+      <button id="btnShuttle" class="btn" title="多梭布边计划：梭子配置 / 逐纬梭次 / 布边校验">🧵 多梭布边</button>
       <button id="btnReverse" class="btn" title="从目标组织反推穿综 / 联结 / 踩踏">🎯 目标反推</button>
       <button id="btnPrint" class="btn" title="生成打印图 (Ctrl+P)">🖨 打印图</button>
     </div>
@@ -241,6 +242,91 @@
     </div>
   </div>
 
+  <!-- ============================= 多梭布边计划 ============================= -->
+  <div id="shuttleModal" class="modal hidden">
+    <div class="modal-card sh-card">
+      <div class="modal-head">
+        <h2>多梭布边计划</h2>
+        <button class="btn close" data-close-sh>&times;</button>
+      </div>
+      <div class="sh-layout">
+        <!-- 左：梭子配置 + 批量工具 + 建议 -->
+        <div class="sh-col sh-col-left">
+          <div class="sh-sub">① 梭子配置（2–8 把）</div>
+          <div class="sh-dims">
+            <label>梭子数 <input id="shCount" type="number" min="2" max="8" /></label>
+            <label>停放浮线上限（纬）<input id="shParkLimit" type="number" min="1" max="200" /></label>
+          </div>
+          <div id="shConfigList" class="sh-config-list"></div>
+
+          <div class="sh-sub" style="margin-top:10px">② 批量工具（不改动锁定纬）</div>
+          <div class="sh-batch">
+            <div class="sh-row">
+              <label>起始纬 <input id="shRangeFrom" type="number" min="1" value="1" /></label>
+              <label>结束纬 <input id="shRangeTo" type="number" min="1" /></label>
+              <label>梭子 <select id="shRangeShuttle" class="sh-mini"></select></label>
+            </div>
+            <div class="sh-row">
+              <label>起始入梭边
+                <select id="shRangeEnter" class="sh-mini">
+                  <option value="L">左</option>
+                  <option value="R">右</option>
+                </select>
+              </label>
+              <label>交接
+                <select id="shRangeJoin" class="sh-mini">
+                  <option value="">无</option>
+                  <option value="wrap">包绕</option>
+                  <option value="lock">交锁</option>
+                  <option value="cut">剪断重接</option>
+                </select>
+              </label>
+              <button id="shRangeApply" class="btn tiny">按区间分配</button>
+            </div>
+            <div class="sh-row">
+              <label>循环长度 <input id="shCycleLen" type="number" min="1" value="4" /></label>
+              <button id="shCycleApply" class="btn tiny" title="以前 N 纬为模板复制梭次，入梭边自动顺推">按前 N 纬循环复制</button>
+              <button id="shAlign" class="btn tiny" title="按推演停放边重写所有未锁定纬的入梭边">入梭边自动顺边</button>
+            </div>
+            <div class="sh-row">
+              <button id="shColorToWeft" class="btn tiny" title="把各纬梭子的纱色写入纬线带">梭子纱色→纬线带</button>
+              <button id="shClearAll" class="btn tiny">清空未锁定</button>
+              <button id="shLockAll" class="btn tiny">全部锁定</button>
+              <button id="shUnlockAll" class="btn tiny">全部解锁</button>
+            </div>
+          </div>
+
+          <div class="sh-sub" style="margin-top:10px">③ 交接建议（只调整未锁定纬，可撤销）</div>
+          <div class="sh-suggest">
+            <div class="sh-row">
+              <label class="check"><input type="radio" name="shPrefer" value="wrap" checked /> 包绕</label>
+              <label class="check"><input type="radio" name="shPrefer" value="lock" /> 交锁</label>
+              <button id="shSuggest" class="btn tiny btn-primary">生成建议</button>
+            </div>
+            <div id="shSuggestList" class="sh-suggest-list">
+              <p class="hint">点击“生成建议”预览包绕 / 交锁 / 剪断重接与顺边修改。</p>
+            </div>
+            <button id="shApplySuggest" class="btn tiny" disabled>应用所选建议</button>
+          </div>
+        </div>
+
+        <!-- 右：逐纬梭次表 -->
+        <div class="sh-col sh-col-right">
+          <div class="sh-sub">④ 逐纬梭次（拖动 ⠿ 换序；锁定行不被批量修改）</div>
+          <div class="sh-table-wrap">
+            <table class="sh-table">
+              <thead>
+                <tr><th></th><th>纬</th><th>梭子</th><th>入梭边</th><th>交接</th><th>锁</th><th>路径状态</th></tr>
+              </thead>
+              <tbody id="shPickRows"></tbody>
+            </table>
+          </div>
+          <p class="hint" id="shSummary"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= Toast ============================= -->
   <div id="toast" class="toast hidden"></div>
 
@@ -256,6 +342,7 @@
   <script src="/static/engine.js"></script>
   <script src="/static/reverse.js"></script>
   <script src="/static/reverse-ui.js"></script>
+  <script src="/static/shuttle-ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -449,6 +449,74 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); outline-offse
 .rev-actions .btn { width: 100%; padding: 8px; font-size: 14px; }
 .hidden { display: none !important; }
 
+/* =====================================================================
+   多梭布边计划
+   ===================================================================== */
+.sh-card {
+  width: min(1080px, 96vw);
+  max-height: 92vh;
+  padding: 16px 18px;
+}
+.sh-layout { display: grid; grid-template-columns: 400px 1fr; gap: 16px; }
+.sh-col { min-width: 0; }
+.sh-sub { font-size: 13px; font-weight: 600; margin: 4px 0 8px; }
+.sh-dims { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.sh-dims label { font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; }
+.sh-dims input[type="number"] { width: 60px; padding: 3px 6px; }
+
+.sh-config-list { display: flex; flex-direction: column; gap: 5px; }
+.sh-config-row {
+  display: flex; align-items: center; gap: 8px;
+  background: #fff; border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 8px;
+}
+.sh-config-name { font-weight: 600; font-size: 12px; flex: 0 0 30px; }
+.sh-swatch {
+  width: 16px; height: 16px; border-radius: 4px;
+  border: 1px solid rgba(0,0,0,.25); flex: 0 0 16px;
+}
+.sh-usage { margin-left: auto; font-size: 11px; color: var(--ink-soft); }
+select.sh-mini { width: auto; padding: 2px 4px; font-size: 12px; }
+
+.sh-batch { display: flex; flex-direction: column; gap: 6px; }
+.sh-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sh-row label { font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; }
+.sh-row input[type="number"] { width: 56px; padding: 3px 6px; }
+
+.sh-suggest { display: flex; flex-direction: column; gap: 6px; }
+.sh-suggest-list {
+  max-height: 22vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; padding: 6px 8px;
+}
+.sh-sug-row {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 12px; line-height: 1.5; margin-bottom: 4px; cursor: pointer;
+}
+.sh-sug-skip { color: var(--ink-soft); cursor: default; font-style: italic; }
+
+.sh-table-wrap {
+  max-height: 58vh; overflow-y: auto;
+  border: 1px solid var(--grid-strong); border-radius: 6px; background: #fff;
+}
+.sh-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sh-table th, .sh-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 2px 5px; text-align: left; white-space: nowrap;
+}
+.sh-table th {
+  position: sticky; top: 0; background: var(--panel);
+  color: var(--ink-soft); font-weight: 600; z-index: 1;
+}
+.sh-table tr.sh-locked { background: #f3eee0; }
+.sh-table tr.sh-problem .sh-status { color: var(--bad); font-weight: 600; }
+.sh-table tr.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.sh-status { font-size: 11px; color: var(--ink-soft); white-space: normal; }
+.drag-handle { cursor: grab; color: var(--ink-soft); user-select: none; }
+tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
+.edge-toggle { min-width: 46px; padding: 2px 6px; font-size: 11px; }
+.edge-toggle:disabled { opacity: .45; }
+
 @media print {
   @page { size: A4 landscape; margin: 10mm; }
   body { background: #fff; overflow: visible; }

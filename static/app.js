@@ -55,18 +55,19 @@ const state = {
 };
 
 /* ------------------------------- 布局 --------------------------------- */
-const CELL = 22, BAND = 14, GAP = 18;
-const PADL = 52, PADT = 42, PADR = 44, PADB = 34;
+const CELL = 22, BAND = 14, GAP = 18, STRIPW = 26;
+const PADL = 86, PADT = 42, PADR = 44, PADB = 34;
 
 function computeLayout(d) {
   const drawY0 = PADT + d.shafts * CELL + GAP;
   const rightX0 = PADL + d.ends * CELL + GAP;
   const bandX = PADL - BAND - 8;
   const bandY = PADT - BAND - 8;
+  const stripX = bandX - 6 - STRIPW;
   const L = {
     W: PADL + (d.ends + d.shafts) * CELL + GAP + PADR,
     H: drawY0 + d.picks * CELL + PADB,
-    drawY0, rightX0, bandX, bandY,
+    drawY0, rightX0, bandX, bandY, stripX,
     regions: {
       threading: { x0: PADL, y0: PADT, cols: d.ends, rows: d.shafts, w: d.ends * CELL, h: d.shafts * CELL, cell: CELL },
       tieup:     { x0: rightX0, y0: PADT, cols: d.treadles, rows: d.shafts, w: d.treadles * CELL, h: d.shafts * CELL, cell: CELL },
@@ -131,6 +132,7 @@ function drawBase() {
   drawRegionFrame(ctx, L.regions.drawdown);
   drawRegionFrame(ctx, L.regions.treadling);
   drawBands(ctx, d);
+  drawShuttleStrip(ctx, d);
   drawThreading(ctx, d);
   drawTieup(ctx, d);
   drawTreadling(ctx, d);
@@ -198,6 +200,119 @@ function drawBandNumbers(ctx, d, R, arr, horizontal) {
 function colorOf(d, idx) {
   const c = d.palette[idx];
   return c ? c.hex : '#888';
+}
+
+/* ------------------------------- 梭道（多梭布边） ---------------------- */
+const JOIN_NAMES = { wrap: '包绕', lock: '交锁', cut: '剪断重接' };
+const JOIN_SHORT = { wrap: '包', lock: '锁', cut: '剪' };
+
+/** 交接方式小符号：包绕=圆圈，交锁=叉，剪断=双斜杠 */
+function drawJoinMark(ctx, x, y, size, join, color) {
+  ctx.save();
+  ctx.strokeStyle = color || '#2d2a24';
+  ctx.lineWidth = 1.4;
+  const cx = x + size / 2, cy = y + size / 2, r = size * .3;
+  if (join === 'wrap') {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  } else if (join === 'lock') {
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+    ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+    ctx.stroke();
+  } else if (join === 'cut') {
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx - r * .2, cy - r);
+    ctx.moveTo(cx + r * .2, cy + r); ctx.lineTo(cx + r, cy - r);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** 梭子色块（圆角小牌 + 梭号） */
+function drawShuttleChip(ctx, x, y, w, h, hex, num, opts = {}) {
+  ctx.save();
+  ctx.globalAlpha = opts.alpha != null ? opts.alpha : 1;
+  ctx.fillStyle = hex;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, 3);
+  else ctx.rect(x, y, w, h);
+  ctx.fill();
+  if (opts.ring) {
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = opts.ring;
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.min(10, h - 3)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,.6)';
+  ctx.shadowBlur = 2;
+  ctx.fillText(String(num), x + w / 2, y + h / 2 + .5);
+  ctx.restore();
+}
+
+/** 图板左侧梭道：逐纬显示梭子 / 入梭方向 / 交接符号 / 锁定点 */
+function drawShuttleStrip(ctx, d) {
+  const L = state.layout, A = state.analysis;
+  const x0 = L.stripX, y0 = L.drawY0;
+  const H = d.picks * CELL;
+  ctx.fillStyle = '#fffdf7';
+  ctx.fillRect(x0, y0, STRIPW, H);
+  ctx.strokeStyle = '#e4dcc9';
+  ctx.beginPath();
+  for (let p = 1; p < d.picks; p++) {
+    const y = y0 + p * CELL + .5;
+    ctx.moveTo(x0, y); ctx.lineTo(x0 + STRIPW, y);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = '#b9ae94';
+  ctx.strokeRect(x0 + .5, y0 + .5, STRIPW - 1, H - 1);
+
+  // 列标题
+  ctx.fillStyle = '#6b6457';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('梭', x0 + STRIPW / 2, y0 - 8);
+
+  const sh = d.shuttles;
+  if (!sh) return;
+  const sp = A && A.shuttle;
+  for (let p = 0; p < d.picks; p++) {
+    const y = y0 + p * CELL;
+    const a = sh.picks[p];
+    if (sh.locked[p]) {
+      // 锁定点（已织纬）
+      ctx.fillStyle = 'rgba(107,100,87,.65)';
+      ctx.beginPath();
+      ctx.arc(x0 + STRIPW - 4, y + 4, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (!a) {
+      ctx.fillStyle = 'rgba(107,100,87,.4)';
+      ctx.beginPath();
+      ctx.arc(x0 + 9, y + CELL / 2, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+    const r = sp && sp.rows ? sp.rows[p] : null;
+    drawShuttleChip(ctx, x0 + 2, y + 4, 14, CELL - 8,
+      colorOf(d, sh.colors[a.s]), a.s + 1,
+      r && r.mismatch ? { ring: '#b3352a' } : {});
+    // 入梭方向小三角（左入▶ / 右入◀），画在色块下缘
+    ctx.fillStyle = 'rgba(255,255,255,.92)';
+    const ay = y + CELL - 6, ax = x0 + 9;
+    ctx.beginPath();
+    if (a.enter === 'L') {   // 左入 → 向右织
+      ctx.moveTo(ax - 2.5, ay - 2.5); ctx.lineTo(ax + 2.5, ay); ctx.lineTo(ax - 2.5, ay + 2.5);
+    } else {                 // 右入 → 向左织
+      ctx.moveTo(ax + 2.5, ay - 2.5); ctx.lineTo(ax - 2.5, ay); ctx.lineTo(ax + 2.5, ay + 2.5);
+    }
+    ctx.closePath();
+    ctx.fill();
+    if (a.join) drawJoinMark(ctx, x0 + 16, y + (CELL - 10) / 2, 10, a.join);
+  }
 }
 
 function markRect(ctx, x, y, size) {
@@ -546,6 +661,10 @@ function drawPlayback(ctx, now) {
   ctx.restore();
 
   // 梭子沿纬向行进；经浮点处线段隐到下方
+  const sp = A.shuttle;
+  const shRow = sp ? sp.rows[p] : null;
+  const sh = d.shuttles;
+  const yarn = shRow ? colorOf(d, sh.colors[shRow.shuttle]) : '#1d6f8e';
   const cycle = 1400 / Number($('#playSpeed').value || 3);
   const prog = ((now % cycle) / cycle);
   const dd = A.derived.drawdown[p];
@@ -556,24 +675,54 @@ function drawPlayback(ctx, now) {
     const y = Rd.y0 + p * CELL + CELL / 2;
     const v = dd[e];
     if (v === null) { ctx.strokeStyle = 'rgba(179,53,42,.5)'; ctx.setLineDash([3, 3]); }
-    else if (v === 0) { ctx.strokeStyle = '#1d6f8e'; ctx.setLineDash([]); } // 纬在上：可见
+    else if (v === 0) { ctx.strokeStyle = yarn; ctx.setLineDash([]); } // 纬在上：可见
     else { ctx.strokeStyle = 'rgba(29,111,142,.3)'; ctx.setLineDash([2, 3]); } // 经在上：压在下面
     ctx.beginPath();
     ctx.moveTo(x, y); ctx.lineTo(x + CELL, y);
     ctx.stroke();
   }
   ctx.setLineDash([]);
-  // 梭头
-  const sx = Rd.x0 + prog * d.ends * CELL;
+  // 梭头：方向随入梭边（左入右行 / 右入左行）
+  const enter = shRow ? shRow.enter : 'L';
+  const sx = enter === 'L' ? Rd.x0 + prog * d.ends * CELL
+                           : Rd.x0 + (1 - prog) * d.ends * CELL;
   const sy = Rd.y0 + p * CELL + CELL / 2;
-  ctx.fillStyle = '#1d6f8e';
+  ctx.fillStyle = yarn;
   ctx.beginPath();
-  ctx.moveTo(sx + 7, sy);
-  ctx.lineTo(sx - 6, sy - 6);
-  ctx.lineTo(sx - 6, sy + 6);
+  if (enter === 'L') {
+    ctx.moveTo(sx + 7, sy); ctx.lineTo(sx - 6, sy - 6); ctx.lineTo(sx - 6, sy + 6);
+  } else {
+    ctx.moveTo(sx - 7, sy); ctx.lineTo(sx + 6, sy - 6); ctx.lineTo(sx + 6, sy + 6);
+  }
   ctx.closePath();
   ctx.fill();
   ctx.restore();
+
+  // 多梭布边：停放位置 + 当前交接
+  if (sp && sp.active && sh) {
+    const before = p > 0 ? sp.parked[p - 1] : sp.home;
+    const groups = { L: [], R: [] };
+    for (let k = 0; k < sh.count; k++) {
+      if (shRow && shRow.shuttle === k) continue;   // 当前梭在织，不停放
+      groups[before[k]].push(k);
+    }
+    for (const side of ['L', 'R']) {
+      const g = groups[side];
+      g.forEach((k, i) => {
+        const cw = 16, ch = 13;
+        const x = side === 'L' ? Rd.x0 + 2 : Rd.x0 + Rd.w - cw - 2;
+        const y = Rd.y0 + p * CELL + CELL / 2 + (i - (g.length - 1) / 2) * (ch + 2) - ch / 2;
+        drawShuttleChip(ctx, x, y, cw, ch, colorOf(d, sh.colors[k]), k + 1, { alpha: .92 });
+      });
+    }
+    // 当前纬交接符号（入梭侧）
+    if (shRow && shRow.join) {
+      const jx = shRow.enter === 'L' ? Rd.x0 + 2 : Rd.x0 + Rd.w - 12;
+      ctx.fillStyle = 'rgba(255,253,247,.9)';
+      ctx.fillRect(jx - 1, Rd.y0 + p * CELL + 1, 12, 12);
+      drawJoinMark(ctx, jx, Rd.y0 + p * CELL + 2, 10, shRow.join, '#9c4a2f');
+    }
+  }
 }
 
 /* ------------------------------- 命中测试 ----------------------------- */
@@ -581,6 +730,12 @@ function eventCell(ev) {
   const rect = baseCvs.getBoundingClientRect();
   const x = (ev.clientX - rect.left) / state.zoom;
   const y = (ev.clientY - rect.top) / state.zoom;
+  const L = state.layout, d = state.draft;
+  // 梭道（多梭布边）：独立命中，不在通用 regions 内
+  if (L.stripX !== undefined && x >= L.stripX && x < L.stripX + STRIPW &&
+      y >= L.drawY0 && y < L.drawY0 + d.picks * CELL) {
+    return { grid: 'shuttletrack', r: clamp(Math.floor((y - L.drawY0) / CELL), 0, d.picks - 1), c: 0, x, y };
+  }
   for (const [grid, R] of Object.entries(state.layout.regions)) {
     if (x >= R.x0 && x < R.x0 + R.w && y >= R.y0 && y < R.y0 + R.h) {
       const c = R.band && R.axis === 'weft' ? 0 : Math.floor((x - R.x0) / R.cell);
@@ -608,6 +763,11 @@ function onPointerDown(ev) {
   }
 
   if (hit.grid === 'drawdown') { toast('组织图为推导结果，请编辑穿综 / 联结 / 踩踏'); return; }
+  if (hit.grid === 'shuttletrack') {
+    if (state.tool === 'select') return;   // 梭道不支持框选
+    handleShuttleTrackClick(hit, ev.button === 2);
+    return;
+  }
   if ((hit.grid === 'threading' && state.lockThreading) ||
       (hit.grid === 'tieup' && state.lockTieup)) {
     $('#brushHint').textContent = hit.grid === 'threading' ? '穿综已锁定：仅可修改踩踏序列与色带。'
@@ -709,6 +869,32 @@ function applyPaint(hit, erase) {
       d.weftColor[hit.r] = erase ? 0 : state.selectedColor;
       break;
   }
+}
+
+/* 梭道点击：左键循环分配梭子（入梭边按推演停放边自动给定），右键清除 */
+function handleShuttleTrackClick(hit, erase) {
+  const d = state.draft, sh = d.shuttles;
+  if (!sh) return;
+  const p = hit.r;
+  if (sh.locked[p]) { toast(`第 ${p + 1} 纬已锁定（已织），不可改梭`); return; }
+  pushHistory();
+  if (erase) {
+    sh.picks[p] = null;
+  } else {
+    const cur = sh.picks[p];
+    const nextS = cur == null ? 0 : (cur.s + 1 >= sh.count ? null : cur.s + 1);
+    if (nextS === null) {
+      sh.picks[p] = null;
+    } else {
+      // 该梭在第 p 纬前的停放边 = 上次离场边（从未使用则为初始停放边）
+      const sp = state.analysis && state.analysis.shuttle;
+      const enter = sp ? (p > 0 ? sp.parked[p - 1][nextS] : sp.home[nextS]) : sh.home[nextS];
+      sh.picks[p] = { s: nextS, enter, join: cur && cur.s === nextS ? cur.join : null };
+    }
+  }
+  afterEdit();
+  const a = sh.picks[p];
+  toast(a ? `第 ${p + 1} 纬 → 梭${a.s + 1}（${a.enter === 'L' ? '左' : '右'}入）` : `第 ${p + 1} 纬已清除梭子`);
 }
 
 /* ------------------------------- 撤销 / 重做 -------------------------- */
@@ -890,6 +1076,7 @@ function afterEdit() {
   refreshStats();
   refreshPreviews();
   refreshCompareIfActive();
+  if (window.__shuttleRefresh) window.__shuttleRefresh();
   scheduleAutosave();
 }
 
@@ -903,6 +1090,7 @@ function afterStructural() {
   refreshPreviews();
   refreshTreadleBrush();
   refreshCompareIfActive();
+  if (window.__shuttleRefresh) window.__shuttleRefresh();
   scheduleAutosave();
 }
 
@@ -931,7 +1119,7 @@ function syncInputs() {
 
 function loadDraft(d, name, id) {
   stopPlay();
-  state.draft = d;
+  state.draft = normalizeDraft(d);   // 旧草稿可能缺多梭等新字段，先补齐
   state.savedId = id ?? null;
   if (name) $('#draftName').value = name;
   state.history.length = 0;
@@ -1139,6 +1327,16 @@ function updateHoverInfo() {
     },
     warpband: () => `经色带：第 ${h.c + 1} 根经 → 色号 ${d.warpColor[h.c] + 1} ${d.palette[d.warpColor[h.c]].name}`,
     weftband: () => `纬色带：第 ${h.r + 1} 纬 → 色号 ${d.weftColor[h.r] + 1} ${d.palette[d.weftColor[h.r]].name}`,
+    shuttletrack: () => {
+      const sh = d.shuttles;
+      if (!sh) return '梭道（多梭布边）';
+      const a = sh.picks[h.r];
+      const base = `梭道：第 ${h.r + 1} 纬`;
+      if (!a) return base + ' 未指定梭子（左键循环分配，右键清除）';
+      const jn = a.join ? JOIN_NAMES[a.join] : '无';
+      return base + ` → 梭${a.s + 1}，${a.enter === 'L' ? '左入右行' : '右入左行'}，交接 ${jn}` +
+        (sh.locked[h.r] ? '，已锁定' : '');
+    },
   };
   el.textContent = map[h.grid] ? map[h.grid]() : '';
 }
@@ -1187,8 +1385,27 @@ function updatePlayInfo() {
   const d = state.draft, p = state.playPick, A = state.analysis;
   const t = d.treadling[p];
   const lifted = [...A.derived.lifted[p]].map(s => s + 1).join('、') || '无';
+  let shTxt = '';
+  const sp = A.shuttle, sh = d.shuttles;
+  if (sp && sp.active && sh) {
+    const row = sp.rows[p];
+    if (row) {
+      const cname = (d.palette[sh.colors[row.shuttle]] || {}).name || '';
+      shTxt = `　梭子 <b>${row.shuttle + 1} ${cname}</b> ${row.enter === 'L' ? '左→右' : '右→左'}` +
+        (row.join ? ` · ${JOIN_NAMES[row.join]}` : '');
+    } else {
+      shTxt = '　梭子 <b>未指定</b>';
+    }
+    const before = p > 0 ? sp.parked[p - 1] : sp.home;
+    const parks = [];
+    for (let k = 0; k < sh.count; k++) {
+      if (row && row.shuttle === k) continue;
+      parks.push(`梭${k + 1}@${before[k] === 'L' ? '左' : '右'}`);
+    }
+    if (parks.length) shTxt += `　停放：${parks.join(' ')}`;
+  }
   $('#playInfo').innerHTML =
-    `第 <b>${p + 1}</b>/${d.picks} 纬　踏板 <b>${t >= 0 ? t + 1 : '—'}</b>　升起综框：<b>${lifted}</b>`;
+    `第 <b>${p + 1}</b>/${d.picks} 纬　踏板 <b>${t >= 0 ? t + 1 : '—'}</b>　升起综框：<b>${lifted}</b>${shTxt}`;
 }
 
 /* ------------------------------- 缩放 / 平移 -------------------------- */
@@ -1421,6 +1638,7 @@ function normalizeDraft(d) {
   const base = Engine.blankDraft(1, 1, 1, 1);
   const merged = { ...base, ...d };
   merged.palette = Array.isArray(d.palette) && d.palette.length ? d.palette : base.palette;
+  merged.shuttles = Engine.normalizeShuttles(d.shuttles, merged.picks);
   return merged;
 }
 
@@ -1436,9 +1654,10 @@ function doPrint() {
     `校验：错误 ${A.validation.errors}　警告 ${A.validation.warns}`;
 
   // 打印用小尺寸重绘到专用 canvas
-  const PCELL = 16, PBAND = 10, PGAP = 14, PP = 40;
+  const PCELL = 16, PBAND = 10, PGAP = 14, PSTRIP = 20, PP = 72;
   const drawY = PP + d.shafts * PCELL + PGAP;
   const rightX = PP + d.ends * PCELL + PGAP;
+  const pStripX = PP - PBAND - 6 - 6 - PSTRIP;
   const W = PP + (d.ends + d.shafts) * PCELL + PGAP + 40;
   const H = drawY + d.picks * PCELL + 40;
   const cvs = $('#printCanvas');
@@ -1448,6 +1667,7 @@ function doPrint() {
   ctx.fillRect(0, 0, W, H);
 
   const printL = {
+    stripX: pStripX, stripW: PSTRIP,
     regions: {
       threading: { x0: PP, y0: PP, cols: d.ends, rows: d.shafts, w: d.ends * PCELL, h: d.shafts * PCELL, cell: PCELL },
       tieup:     { x0: rightX, y0: PP, cols: d.treadles, rows: d.shafts, w: d.treadles * PCELL, h: d.shafts * PCELL, cell: PCELL },
@@ -1482,6 +1702,31 @@ function doPrint() {
     for (let s = 0; s < d.shafts; s++) if (d.tieup[s][t]) ss.push(s + 1);
     html += `踏板 ${t + 1} → 综框 ${ss.length ? ss.join('、') : '（空！）'}<br>`;
   }
+
+  // 多梭布边：梭子配置 + 按纬梭次 + 布边警告
+  const sh = d.shuttles, sp = A.shuttle;
+  if (sh && sp && sp.active) {
+    html += `<br><b>多梭布边：</b>梭子 ${sh.count} 把　停放浮线上限 ${sh.parkLimit} 纬<br>`;
+    for (let k = 0; k < sh.count; k++) {
+      const c = d.palette[sh.colors[k]];
+      html += `<span style="display:inline-block;margin-right:12px">
+        <span style="display:inline-block;width:10px;height:10px;background:${c ? c.hex : '#888'};border:1px solid #555"></span>
+        梭${k + 1} 色号${sh.colors[k] + 1} ${c ? c.name : ''}·初始停${sh.home[k] === 'L' ? '左' : '右'}边</span>`;
+    }
+    html += '<br><b>按纬梭次：</b>';
+    const tokens = [];
+    for (let p = 0; p < d.picks; p++) {
+      const a = sh.picks[p];
+      if (!a) { tokens.push(`${p + 1}:—`); continue; }
+      tokens.push(`${p + 1}:${a.s + 1}${a.enter === 'L' ? '→' : '←'}${a.join ? JOIN_SHORT[a.join] : ''}` +
+        (sh.locked[p] ? '🔒' : ''));
+    }
+    html += tokens.join(' ');
+    const shIssues = A.validation.issues.filter(i => i.code.startsWith('shuttle-'));
+    html += '<br><b>布边警告：</b>' + (shIssues.length
+      ? shIssues.map(i => `${i.level === 'warn' ? '⚠' : '✗'} ${i.msg}`).join('<br>')
+      : '无');
+  }
   legend.innerHTML = html;
 
   setTimeout(() => window.print(), 120);
@@ -1511,6 +1756,31 @@ function drawPrintDraft(ctx, d, A, L, C, B) {
   for (let p = 0; p < d.picks; p++) {
     ctx.fillStyle = colorOf(d, d.weftColor[p]);
     ctx.fillRect(Rf.x0, Rf.y0 + p * C, B, C);
+  }
+
+  // 梭道（多梭布边）
+  const sh = d.shuttles;
+  if (sh && L.stripX !== undefined) {
+    const x0 = L.stripX, y0 = L.regions.drawdown.y0, SW = L.stripW || 20;
+    ctx.strokeStyle = '#888';
+    ctx.strokeRect(x0 + .5, y0 + .5, SW - 1, d.picks * C - 1);
+    ctx.fillStyle = '#333';
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('梭', x0 + SW / 2, y0 - 8);
+    for (let p = 0; p < d.picks; p++) {
+      const a = sh.picks[p];
+      if (!a) continue;
+      const y = y0 + p * C;
+      drawShuttleChip(ctx, x0 + 1, y + 2, 12, C - 4, colorOf(d, sh.colors[a.s]), a.s + 1);
+      if (a.join) drawJoinMark(ctx, x0 + 12, y + (C - 8) / 2, 8, a.join);
+      if (sh.locked[p]) {
+        ctx.fillStyle = '#555';
+        ctx.beginPath();
+        ctx.arc(x0 + SW - 3, y + 3, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   // 组织图彩色
@@ -1700,7 +1970,10 @@ document.addEventListener('DOMContentLoaded', init);
 
 // 便于自动化测试 / 控制台调试
 if (typeof window !== 'undefined') {
-  window.__loom = { state, Engine };
+  window.__loom = {
+    state, Engine,
+    pushHistory, afterEdit, afterStructural, normalizeDraft,
+  };
   // 供「目标反推」模块调用：应用候选为不覆盖原稿的新草稿
   window.loadDraft = loadDraft;
   window.toast = toast;
