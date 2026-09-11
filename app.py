@@ -541,6 +541,9 @@ def add_revision(batch_id):
     row = get_batch_or_404(batch_id)
     if row is None:
         return jsonify(error="批次不存在"), 404
+    # 归档批次只读：修订记录属于批次数据，服务端必须拒绝（不依赖界面禁用）
+    if row["status"] == "archived":
+        return jsonify(error="批次已归档，不能再记录修订"), 409
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify(error="请求格式错误"), 400

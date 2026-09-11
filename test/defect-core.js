@@ -128,7 +128,7 @@ const approx = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   const R = DC.analyzeRecurrence([b1, b2, b3]);
   const g11 = R.markGroup.get('1:11');
   check('同组：标记 11 与 12', g11 && R.markGroup.get('1:12') === g11);
-  check('跨循环（不同循环砖）', g11.crossCycle === true, { tiles: [...g11.tiles] });
+  check('跨循环（不同循环砖）', g11.crossCycle === true, { perBatch: g11.perBatch.map(p => [...p.tiles]) });
   check('跨批次（批次 1、2）', g11.crossBatch === true, g11.batches);
   check('组成员 3 处', g11.count === 3, g11.count);
   check('核查综框去重（end1→2 综, end5→2 综）= 综框 2', g11.shafts.join(',') === '1', g11.shafts);
@@ -157,6 +157,48 @@ const approx = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   const b5 = { id: 5, draftId: null, snapshot: JSON.parse(JSON.stringify(snap)), repeatWarp: 4, repeatWeft: 4, marks: [mk(51, 'float', 0, 0)] };
   const R4 = DC.analyzeRecurrence([b4, b5]);
   check('无 draftId 同指纹仍判跨批次', R4.groups[0].crossBatch === true);
+
+  // 回归①：两批次各仅 1 处、循环砖不同 → 跨批次成立，但不构成跨循环
+  const c1 = {
+    id: 11, draftId: 21, snapshot: snap, repeatWarp: 4, repeatWeft: 4,
+    marks: [mk(111, 'miss', 1, 3)],                         // 循环位 (1,3)，砖 (0,0)
+  };
+  const c2 = {
+    id: 12, draftId: 21, snapshot: snap, repeatWarp: 4, repeatWeft: 4,
+    marks: [mk(121, 'miss', 5, 7)],                         // 同循环位 (1,3)，砖 (1,1)
+  };
+  const RC = DC.analyzeRecurrence([c1, c2]);
+  check('[回归] 两批次各单点不同砖：跨批次=true', RC.groups[0].crossBatch === true);
+  check('[回归] 两批次各单点不同砖：跨循环=false', RC.groups[0].crossCycle === false, RC.groups[0].perBatch);
+
+  // 对照：同批次两处不同砖 → 跨循环成立
+  const d1 = {
+    id: 13, draftId: 22, snapshot: snap, repeatWarp: 4, repeatWeft: 4,
+    marks: [mk(131, 'miss', 1, 3), mk(132, 'miss', 5, 7)],  // 砖 (0,0) 与 (1,1)
+  };
+  const RD = DC.analyzeRecurrence([d1]);
+  check('同批次两处不同砖：跨循环=true', RD.groups[0].crossCycle === true);
+  check('单批次：跨批次=false', RD.groups[0].crossBatch === false);
+
+  // 对照：两批次各单点且同砖（同循环位重复出现于两批）→ 仅跨批次
+  const e1 = { id: 14, draftId: 23, snapshot: snap, repeatWarp: 4, repeatWeft: 4, marks: [mk(141, 'broken', 2, 2)] };
+  const e2 = { id: 15, draftId: 23, snapshot: snap, repeatWarp: 4, repeatWeft: 4, marks: [mk(151, 'broken', 2, 2)] };
+  const RE = DC.analyzeRecurrence([e1, e2]);
+  check('两批次同砖单点：跨批次=true 且 跨循环=false',
+    RE.groups[0].crossBatch === true && RE.groups[0].crossCycle === false);
+
+  // 混合：批次1两处（不同砖）+ 批次2一处 → crossBatch 与 crossCycle 同时成立
+  const f1 = {
+    id: 16, draftId: 24, snapshot: snap, repeatWarp: 4, repeatWeft: 4,
+    marks: [mk(161, 'float', 1, 3), mk(162, 'float', 5, 7)],
+  };
+  const f2 = { id: 17, draftId: 24, snapshot: snap, repeatWarp: 4, repeatWeft: 4, marks: [mk(171, 'float', 1, 3)] };
+  const RF = DC.analyzeRecurrence([f1, f2]);
+  check('混合重复：跨批次与同批跨循环同时成立',
+    RF.groups[0].crossBatch === true && RF.groups[0].crossCycle === true);
+  check('perBatch 逐批次计数（2、1）',
+    RF.groups[0].perBatch.map(p => p.count).sort().join(',') === '1,2',
+    RF.groups[0].perBatch.map(p => p.count));
 }
 
 /* ---------------- 修订：穿综 / 联结 / 踩踏 + 差异 ---------------- */

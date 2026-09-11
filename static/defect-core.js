@@ -201,20 +201,26 @@ const DefectCore = (() => {
   /**
    * 跨循环 / 跨批次分组。
    * batches: [{ id, draftId, snapshot, repeatWarp, repeatWeft, marks:[...] }]
+   *
+   * crossCycle（跨循环）只在【同一批次内】成立：该批次中同组标记落在不止一块
+   * 循环砖（tileX/tileY）；不同批次各出现一次、即使循环砖不同，也只是跨批次，
+   * 不能据此标记跨循环。
+   * crossBatch（跨批次）：同组标记出现在不止一个批次。
+   *
    * 返回：
-   *   groups: [{ key, type, cx, cy, members:[{batchId, markId, end, pick, tileX, tileY}],
-   *              crossCycle:bool, crossBatch:bool, batches:Set, shafts:Set,
-   *              treadles:Set, tiePoints:Set }]
+   *   groups: [{ key, type, cx, cy, members, crossCycle, crossBatch,
+   *              perBatch: [{batchId, tiles:Set, count, outOfRange}], ... }]
    *   markGroup: Map(markKey `${batchId}:${markId}` -> group)
    */
   function analyzeRecurrence(batches) {
     const groups = new Map();
     const markGroup = new Map();
-    const fpCache = new Map();
 
     for (const b of batches) {
       const rw = Math.max(1, b.repeatWarp | 0), rh = Math.max(1, b.repeatWeft | 0);
       const sourceKey = b.draftId != null ? `d${b.draftId}` : `f${fingerprint(b.snapshot)}`;
+      const E = b.snapshot ? b.snapshot.ends | 0 : 0;
+      const P = b.snapshot ? b.snapshot.picks | 0 : 0;
       for (const m of b.marks || []) {
         const cp = cyclePosition(m, rw, rh);
         const key = `${sourceKey}|${m.type}|${cp.cx},${cp.cy}`;
@@ -223,7 +229,7 @@ const DefectCore = (() => {
           g = {
             key, type: m.type, cx: cp.cx, cy: cp.cy,
             members: [], batchIds: new Set(),
-            tiles: new Set(), outOfRange: false,
+            perBatch: new Map(),   // batchId -> { tiles:Set, count, outOfRange }
             shafts: new Set(), treadles: new Set(), tiePoints: new Set(),
             ends: new Set(), picks: new Set(),
           };
@@ -234,10 +240,12 @@ const DefectCore = (() => {
           tileX: cp.tileX, tileY: cp.tileY,
         });
         g.batchIds.add(b.id);
-        g.tiles.add(`${cp.tileX},${cp.tileY}`);
-        const E = b.snapshot ? b.snapshot.ends | 0 : 0;
-        const P = b.snapshot ? b.snapshot.picks | 0 : 0;
-        if (m.end < 0 || m.end >= E || m.pick < 0 || m.pick >= P) g.outOfRange = true;
+
+        let pb = g.perBatch.get(b.id);
+        if (!pb) { pb = { tiles: new Set(), count: 0, outOfRange: false }; g.perBatch.set(b.id, pb); }
+        pb.tiles.add(`${cp.tileX},${cp.tileY}`);
+        pb.count++;
+        if (m.end < 0 || m.end >= E || m.pick < 0 || m.pick >= P) pb.outOfRange = true;
 
         // 关联综框 / 踏板 / 联结点
         const s = b.snapshot;
@@ -262,13 +270,16 @@ const DefectCore = (() => {
     const list = [];
     for (const g of groups.values()) {
       g.crossBatch = g.batchIds.size > 1;
-      // 跨循环：同批次内落到不止一块循环砖（含幅外循环砖）
-      g.crossCycle = g.tiles.size > 1 || (g.members.length > 1 && g.outOfRange);
+      // 跨循环：任一【同一批次内】的循环砖集合大小 > 1；
+      // 或同批次同循环位多次出现且含幅外标记（延伸到设计幅外的循环）。
+      g.crossCycle = [...g.perBatch.values()].some(pb =>
+        pb.tiles.size > 1 || (pb.count > 1 && pb.outOfRange));
       g.count = g.members.length;
-      g.shafts = [...g.shafts].sort((a, b) => a - b);
-      g.treadles = [...g.treadles].sort((a, b) => a - b);
+      g.shafts = [...g.shafts].sort((a, b2) => a - b2);
+      g.treadles = [...g.treadles].sort((a, b2) => a - b2);
       g.tiePoints = [...g.tiePoints];
       g.batches = [...g.batchIds];
+      g.perBatch = [...g.perBatch.values()];
       list.push(g);
     }
     list.sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));

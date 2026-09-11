@@ -162,6 +162,7 @@ w.fetch = async (url, opts = {}) => {
   if ((m = url.match(/^\/api\/batches\/(\d+)\/revisions$/)) && method === 'POST') {
     const b = batches.get(+m[1]);
     if (!b) return jsonResp({ error: 'x' }, 404);
+    if (b.status === 'archived') return jsonResp({ error: 'archived' }, 409);
     const rv = { id: ++revSeq, action: body.action, summary: body.summary,
                  newDraftId: body.newDraftId ?? null, detail: body.detail, createdAt: '2026-01-03T00:00:00' };
     b.revisions.push(rv);
@@ -257,14 +258,28 @@ const E = w.Engine;
 
     /* ---- 反复分析 ---- */
     const R = await api.ensureRecurrence();
-    // m1 已被拖动到 end2/pick4（循环位 2,0，单点）；跨循环组是 end5/pick7 + 批次2 的 end1/pick3（同循环位 1,3、不同砖）
+    // m1 已被拖动到 end2/pick4（循环位 2,0，单点）；
+    // 组 (1,3) 现在是：批次1 仅 end5/pick7（砖1,1）、批次2 仅 end1/pick3（砖0,0）。
+    // 回归：跨批次成立，但不同批次的单点不得再判跨循环。
     const group = R.groups.find(g => g.type === 'mistread' && g.cx === 1 && g.cy === 3);
-    check('跨批次+跨循环分组存在', group && group.crossBatch && group.crossCycle,
+    check('[回归] 两批次各单点不同砖：跨批次=true', group && group.crossBatch === true,
       group && { count: group.count, cb: group.crossBatch, cc: group.crossCycle });
+    check('[回归] 两批次各单点不同砖：跨循环=false', group && group.crossCycle === false,
+      group && group.perBatch.map(p => ({ count: p.count, tiles: [...p.tiles] })));
     check('分组成员 2 处（两批次各 1）', group && group.count === 2, group && group.count);
     check('核查综框（end1/end5 均穿综框 2）= 2', group.shafts.join(',') === '1', group.shafts);
     check('核查踏板（pick3/7 均踩踏板 4）= 4', group.treadles.join(',') === '3', group.treadles);
     check('联结点列出', group.tiePoints.length >= 1, group.tiePoints);
+
+    // 对照：在开放批次 bid2 再打一个同循环位但不同砖的标记 → 该批次内跨循环成立
+    await api.openBatch(bid2);
+    await api.createMark(25.5, 27.5);                 // end5/pick7，循环位 (1,3)、砖 (1,1)
+    await api.patchMark(batches.get(bid2).marks.find(m => m.end === 5 && m.pick === 7).id, { type: 'mistread' });
+    const R2 = await api.ensureRecurrence();
+    const group2 = R2.groups.find(g => g.type === 'mistread' && g.cx === 1 && g.cy === 3);
+    check('同批次两处不同砖：跨循环=true（跨批次仍=true）',
+      group2.crossCycle === true && group2.crossBatch === true, group2.perBatch.map(p => p.count));
+    await api.openBatch(bid);
 
     /* ---- 反复面板渲染 ---- */
     api.openBatch(bid);
@@ -331,11 +346,21 @@ const E = w.Engine;
     check('类型工具条置 disabled 态', $('#dfTypeRow').classList.contains('disabled'));
     check('归档标签展示', /已归档（不可改写）/.test($('#dfBatchMeta').textContent));
 
+    // 回归：归档批次的修订接口服务端也必须拒绝（不依赖界面禁用）
+    const revResp = await w.fetch(`/api/batches/${bid}/revisions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'tieup', summary: '归档后尝试', detail: { changed: 1 } }),
+    });
+    check('归档后 POST revisions 返回 409', revResp.status === 409, revResp.status);
+    check('归档批次修订记录未增加', batches.get(bid).revisions.length === 1,
+      batches.get(bid).revisions.length);
+
     /* ---- 删除开放批次的标记可行，归档批次不行 ---- */
     await api.openBatch(bid2);
+    const openBefore = batches.get(bid2).marks.length;   // 对照场景中又加过一点
     const idOpen = batches.get(bid2).marks[0].id;
     await api.deleteMark(idOpen);
-    check('开放批次标记可删', batches.get(bid2).marks.length === 0);
+    check('开放批次标记可删', batches.get(bid2).marks.length === openBefore - 1);
     // deleteMark 内部吞掉错误并 toast；归档批次删除应被拒绝（标记仍在）
     const archivedCount = batches.get(bid).marks.length;
     await api.deleteMark(batches.get(bid).marks[0].id);

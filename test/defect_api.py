@@ -141,8 +141,17 @@ class DefectApiTest(unittest.TestCase):
         self.assertEqual(self.client.put(f"/api/batches/{bid}/marks/{mid}",
                          json={"note": "x"}).status_code, 409)
         self.assertEqual(self.client.delete(f"/api/batches/{bid}/marks/{mid}").status_code, 409)
+        # 回归：归档批次同样不得再写修订记录（只读不依赖界面禁用）
+        before_revs = len(self.client.get(f"/api/batches/{bid}").get_json()["revisions"])
+        rv = self.client.post(f"/api/batches/{bid}/revisions", json={
+            "action": "tieup", "summary": "归档后尝试修订", "detail": {"changed": 1},
+        })
+        self.assertEqual(rv.status_code, 409, rv.data)
+        after = self.client.get(f"/api/batches/{bid}").get_json()
+        self.assertEqual(len(after["revisions"]), before_revs)
+        self.assertFalse(any(r["summary"] == "归档后尝试修订" for r in after["revisions"]))
         # 归档批次详情仍可读，标记数据未被改动
-        b = self.client.get(f"/api/batches/{bid}").get_json()
+        b = after
         self.assertEqual(b["status"], "archived")
         self.assertTrue(b["archivedAt"])
         self.assertEqual(len(b["marks"]), 2)
