@@ -482,6 +482,34 @@ function drawOverlay(now) {
   drawIssues(ctx, now);
   drawSelection(ctx, now);
   drawPastePreview(ctx);
+  drawLocateFlash(ctx, now);
+}
+
+/* 外部模块定位闪烁（locateCell） */
+function drawLocateFlash(ctx, now) {
+  const f = state.locateFlash;
+  if (!f || now > f.until) { if (f) state.locateFlash = null; return; }
+  const R = state.layout.regions[f.grid];
+  if (!R) return;
+  let x, y, w, h;
+  if (f.r < 0 || f.c < 0) {
+    x = f.c < 0 ? R.x0 : R.x0 + f.c * CELL;
+    y = f.r < 0 ? R.y0 : R.y0 + f.r * CELL;
+    w = f.c < 0 ? R.w : CELL;
+    h = f.r < 0 ? R.h : CELL;
+  } else {
+    x = R.x0 + f.c * CELL; y = R.y0 + f.r * CELL; w = h = CELL;
+  }
+  const pulse = .5 + .4 * Math.sin(now / 150);
+  ctx.save();
+  ctx.strokeStyle = '#c8784f';
+  ctx.fillStyle = `rgba(200,120,79,${.12 + pulse * .12})`;
+  ctx.lineWidth = 3;
+  ctx.shadowColor = '#c8784f';
+  ctx.shadowBlur = 10;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x + 1.5, y + 1.5, w - 3, h - 3);
+  ctx.restore();
 }
 
 function cellRect(R, r, c) {
@@ -1268,6 +1296,32 @@ function focusIssue(i) {
   state.flashUntil = performance.now() + 2400;
 }
 
+/* ------------------------------- 外部模块定位 ------------------------- */
+/**
+ * 供“试织缺陷回标”等模块调用：关闭弹窗后在主图板定位组织位置。
+ * loc: { grid:'threading'|'tieup'|'treadling'|'drawdown', r, c }
+ * r 或 c 为 -1 / null 表示整列 / 整行高亮。
+ */
+function locateCell(loc) {
+  const L = state.layout;
+  const R = L.regions[loc.grid];
+  if (!R) return;
+  // 关闭所有模态
+  $$('.modal').forEach(m => m.classList.add('hidden'));
+  state.activeIssue = -1;
+  state.locateFlash = {
+    grid: loc.grid, r: loc.r ?? -1, c: loc.c ?? -1, until: performance.now() + 4000,
+  };
+  const cx = loc.c != null && loc.c >= 0 ? R.x0 + loc.c * CELL + CELL / 2 : R.x0 + R.w / 2;
+  const cy = loc.r != null && loc.r >= 0 ? R.y0 + loc.r * CELL + CELL / 2 : R.y0 + R.h / 2;
+  const vp = $('#viewport');
+  vp.scrollTo({
+    left: cx * state.zoom - vp.clientWidth / 2 + 26,
+    top: cy * state.zoom - vp.clientHeight / 2 + 26,
+    behavior: 'smooth',
+  });
+}
+
 /* ------------------------------- 统计 / 预览 -------------------------- */
 function refreshStats() {
   const a = state.analysis, d = state.draft, r = a.rep;
@@ -1972,9 +2026,11 @@ document.addEventListener('DOMContentLoaded', init);
 if (typeof window !== 'undefined') {
   window.__loom = {
     state, Engine,
-    pushHistory, afterEdit, afterStructural, normalizeDraft,
+    pushHistory, afterEdit, afterStructural, normalizeDraft, locateCell,
   };
   // 供「目标反推」模块调用：应用候选为不覆盖原稿的新草稿
   window.loadDraft = loadDraft;
+  // 供「试织缺陷回标」模块调用：在主图板定位穿综 / 联结 / 踩踏 / 组织格
+  window.locateCell = locateCell;
   window.toast = toast;
 }

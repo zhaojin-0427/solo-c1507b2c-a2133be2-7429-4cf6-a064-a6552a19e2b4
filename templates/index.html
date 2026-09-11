@@ -21,6 +21,7 @@
       <button id="btnSave" class="btn btn-primary" title="保存到本地 SQLite (Ctrl+S)">💾 保存草稿</button>
       <button id="btnOpen" class="btn" title="打开已保存草稿">📂 草稿箱</button>
       <button id="btnShuttle" class="btn" title="多梭布边计划：梭子配置 / 逐纬梭次 / 布边校验">🧵 多梭布边</button>
+      <button id="btnDefect" class="btn" title="从当前草稿建立试织批次，在实物坐标上回标漏织 / 错踏 / 断经 / 浮线">🧷 试织回标</button>
       <button id="btnReverse" class="btn" title="从目标组织反推穿综 / 联结 / 踩踏">🎯 目标反推</button>
       <button id="btnPrint" class="btn" title="生成打印图 (Ctrl+P)">🖨 打印图</button>
     </div>
@@ -327,6 +328,136 @@
     </div>
   </div>
 
+  <!-- ============================= 试织缺陷回标 ============================= -->
+  <div id="defectModal" class="modal hidden">
+    <div class="modal-card df-card">
+      <div class="modal-head">
+        <h2>试织缺陷回标</h2>
+        <button class="btn close" data-close-df>&times;</button>
+      </div>
+      <div class="df-layout">
+        <!-- 左：批次 -->
+        <div class="df-col df-col-left">
+          <div class="df-sub">① 试织批次</div>
+          <div class="df-filters">
+            <select id="dfStatusFilter" class="sh-mini">
+              <option value="">全部状态</option>
+              <option value="open">试织中</option>
+              <option value="archived">已归档</option>
+            </select>
+            <select id="dfSourceFilter" class="sh-mini">
+              <option value="">全部来源</option>
+              <option value="current">仅同源当前草稿</option>
+            </select>
+            <button id="dfNewBatch" class="btn tiny btn-primary">从当前草稿建批次</button>
+          </div>
+          <div id="dfBatchList" class="df-batch-list">
+            <p class="hint">读取中…</p>
+          </div>
+
+          <div id="dfCreateForm" class="df-create hidden">
+            <div class="df-sub">② 建立批次（冻结当前草稿快照）</div>
+            <label class="field"><span>批次名称</span>
+              <input id="dfBatchName" type="text" maxlength="80" /></label>
+            <div class="df-grid2">
+              <label class="field"><span>实测经密（根/厘米）</span>
+                <input id="dfWarpDensity" type="number" min="0.5" max="100" step="0.1" value="10" /></label>
+              <label class="field"><span>实测纬密（根/厘米）</span>
+                <input id="dfWeftDensity" type="number" min="0.5" max="100" step="0.1" value="10" /></label>
+              <label class="field"><span>经向缩率（%）</span>
+                <input id="dfWarpShrink" type="number" min="0" max="90" step="0.5" value="8" /></label>
+              <label class="field"><span>纬向缩率（%）</span>
+                <input id="dfWeftShrink" type="number" min="0" max="90" step="0.5" value="8" /></label>
+              <label class="field"><span>原点 X（mm，距左边）</span>
+                <input id="dfOriginX" type="number" step="0.5" value="20" /></label>
+              <label class="field"><span>原点 Y（mm，距布首）</span>
+                <input id="dfOriginY" type="number" step="0.5" value="20" /></label>
+            </div>
+            <p class="hint" id="dfClothSize"></p>
+            <div class="grid-2">
+              <button id="dfCreateSubmit" class="btn tiny btn-primary">冻结快照并建立</button>
+              <button id="dfCreateCancel" class="btn tiny">取消</button>
+            </div>
+          </div>
+
+          <div id="dfBatchMeta" class="df-batch-meta hidden"></div>
+        </div>
+
+        <!-- 中：标尺画布 -->
+        <div class="df-col df-col-center">
+          <div class="df-toolbar">
+            <span class="df-sub" style="margin:0">③ 点选实物位置标记缺陷</span>
+            <div id="dfTypeRow" class="df-type-row">
+              <button class="btn tiny df-type active" data-type="miss"><i class="df-dot" style="background:#29528c"></i>漏织</button>
+              <button class="btn tiny df-type" data-type="mistread"><i class="df-dot" style="background:#b3352a"></i>错踏</button>
+              <button class="btn tiny df-type" data-type="broken"><i class="df-dot" style="background:#7a4d1f"></i>断经</button>
+              <button class="btn tiny df-type" data-type="float"><i class="df-dot" style="background:#b8862f"></i>浮线过长</button>
+            </div>
+            <div class="df-zoom-row">
+              <button id="dfZoomOut" class="btn tiny">−</button>
+              <span id="dfZoomLabel">100%</span>
+              <button id="dfZoomIn" class="btn tiny">+</button>
+              <button id="dfZoomFit" class="btn tiny">适配</button>
+              <label class="check"><input id="dfHeat" type="checkbox" checked /> 热区</label>
+              <label class="check"><input id="dfGrid" type="checkbox" checked /> 组织格</label>
+            </div>
+          </div>
+          <div id="dfViewport" class="df-viewport">
+            <div id="dfBoard" class="df-board">
+              <canvas id="dfBase"></canvas>
+              <canvas id="dfOverlay"></canvas>
+            </div>
+          </div>
+          <div class="df-coord" id="dfCoord">实物坐标 —</div>
+        </div>
+
+        <!-- 右：标记 / 反复 / 修订 -->
+        <div class="df-col df-col-right">
+          <div class="df-tabs">
+            <button class="df-tab active" data-tab="marks">标记 <span id="dfMarkCount" class="df-tab-badge">0</span></button>
+            <button class="df-tab" data-tab="repeat">反复 <span id="dfRepeatCount" class="df-tab-badge">0</span></button>
+            <button class="df-tab" data-tab="view">并排</button>
+            <button class="df-tab" data-tab="revs">修订</button>
+          </div>
+
+          <div class="df-tabpane" data-pane="marks">
+            <div id="dfMarkList" class="df-mark-list">
+              <p class="hint">先建立或打开一个试织批次。</p>
+            </div>
+          </div>
+
+          <div class="df-tabpane hidden" data-pane="repeat">
+            <p class="hint">按最小循环位置汇总跨循环 / 跨批次反复出现的问题，列出需核查的综框、踏板与联结点。</p>
+            <div id="dfRepeatList" class="df-repeat-list"></div>
+          </div>
+
+          <div class="df-tabpane hidden" data-pane="view">
+            <div class="df-side-grid">
+              <div><div class="stat-title">设计组织（正面）</div><canvas id="dfViewDesign" width="220" height="150"></canvas></div>
+              <div><div class="stat-title">正面预览（循环）</div><canvas id="dfViewFront" width="110" height="80"></canvas></div>
+              <div><div class="stat-title">反面预览（循环）</div><canvas id="dfViewBack" width="110" height="80"></canvas></div>
+              <div><div class="stat-title">回标结果（布面 + 标记）</div><canvas id="dfViewMarks" width="220" height="150"></canvas></div>
+            </div>
+            <p class="hint">点击任意小图中的标记即可定位；设计组织图上的标记显示其换算到的经纬位置。</p>
+          </div>
+
+          <div class="df-tabpane hidden" data-pane="revs">
+            <div id="dfReviseBox" class="df-revise-box">
+              <p class="hint">在“标记 / 反复”中点选问题后，可选择修订穿综、联结或踩踏。</p>
+            </div>
+            <div class="df-sub" style="margin-top:8px">修订记录</div>
+            <div id="dfRevList" class="df-rev-list"></div>
+          </div>
+
+          <div class="df-footer">
+            <button id="dfPrint" class="btn tiny">🖨 打印回标图</button>
+            <button id="dfArchive" class="btn tiny btn-primary">📦 归档批次</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= Toast ============================= -->
   <div id="toast" class="toast hidden"></div>
 
@@ -339,10 +470,21 @@
     <div id="printLegend" class="print-legend"></div>
   </section>
 
+  <!-- ============================= 试织回标打印区 ============================= -->
+  <section id="dfPrintSheet" class="print-sheet">
+    <h1 id="dfPrintTitle"></h1>
+    <div id="dfPrintMeta" class="print-meta"></div>
+    <canvas id="dfPrintCanvas"></canvas>
+    <h2 class="print-h2">缺陷标记明细（实物坐标 → 组织位置 → 穿综 / 联结 / 踩踏 / 梭次）</h2>
+    <div id="dfPrintLegend" class="print-legend"></div>
+  </section>
+
   <script src="/static/engine.js"></script>
+  <script src="/static/defect-core.js"></script>
   <script src="/static/reverse.js"></script>
   <script src="/static/reverse-ui.js"></script>
   <script src="/static/shuttle-ui.js"></script>
+  <script src="/static/defect-ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

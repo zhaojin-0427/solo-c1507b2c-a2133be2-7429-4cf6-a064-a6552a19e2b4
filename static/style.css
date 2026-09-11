@@ -526,4 +526,159 @@ tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
   .print-meta { font-size: 12px; margin: 6px 0 10px; columns: 2; line-height: 1.7; }
   .print-legend { font-size: 11px; line-height: 1.8; columns: 3; margin-top: 8px; }
   .print-h2 { font-size: 13px; margin: 14px 0 4px; }
+  /* 回标打印时只显示回标打印页 */
+  body.df-printing #printSheet { display: none; }
+  body:not(.df-printing) #dfPrintSheet { display: none; }
+  body.df-printing #dfPrintSheet { display: block; }
+  #dfPrintSheet .print-legend { columns: 1; }
 }
+
+/* =====================================================================
+   试织缺陷回标
+   ===================================================================== */
+.df-card {
+  width: min(1280px, 97vw);
+  max-height: 94vh;
+  padding: 14px 16px;
+}
+.df-layout { display: grid; grid-template-columns: 272px 1fr 360px; gap: 14px; height: 78vh; }
+.df-col { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.df-col-left, .df-col-right { overflow-y: auto; }
+.df-sub { font-size: 13px; font-weight: 600; margin: 4px 0 8px; }
+
+.df-filters { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.df-batch-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.df-batch {
+  border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  padding: 6px 9px; cursor: pointer;
+}
+.df-batch:hover { border-color: var(--grid-strong); }
+.df-batch.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(156,74,47,.2); }
+.df-batch.arch { background: #f3eee0; }
+.df-batch-name { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.df-batch-meta { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
+.df-tag {
+  font-size: 10px; padding: 0 6px; border-radius: 9px; font-weight: 600;
+  background: var(--paper-2); color: var(--ink-soft); border: 1px solid var(--line);
+}
+.df-tag-open { background: #eef5ef; color: var(--ok); border-color: #b9d4c0; }
+.df-tag-arch { background: #efe8d7; color: #7c6a3f; border-color: #d9cba3; }
+.df-tag-cycle { background: #e8eef7; color: #29528c; border-color: #b9c4d6; }
+.df-tag-batch { background: #fbefec; color: var(--bad); border-color: #e2b6b0; }
+.df-tag-out { background: #faf3e2; color: var(--warn); border-color: #e3cd97; }
+
+.df-create {
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  padding: 8px 10px; margin-bottom: 10px;
+}
+.df-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+
+.df-batch-meta2 { min-height: 0; }
+.df-bm-title { font-weight: 700; font-size: 13px; margin-bottom: 5px; }
+.df-bm-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.df-bm-table td { border-bottom: 1px solid var(--line); padding: 3px 4px; vertical-align: top; }
+.df-bm-table td:first-child { color: var(--ink-soft); width: 64px; white-space: nowrap; }
+
+/* 中部画布 */
+.df-col-center { background: var(--paper-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.df-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.df-type-row { display: flex; gap: 4px; }
+.df-type { display: inline-flex; align-items: center; gap: 4px; }
+.df-type.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.df-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.25); }
+.df-zoom-row { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.df-zoom-row span { font-size: 11px; color: var(--ink-soft); min-width: 42px; text-align: center; }
+.df-zoom-row .check { font-size: 11px; }
+
+.df-viewport {
+  flex: 1; overflow: auto; position: relative;
+  background:
+    linear-gradient(45deg, #e9e1cf 25%, transparent 25%) -10px 0,
+    linear-gradient(-45deg, #e9e1cf 25%, transparent 25%) -10px 0,
+    linear-gradient(45deg, transparent 75%, #e9e1cf 75%),
+    linear-gradient(-45deg, transparent 75%, #e9e1cf 75%);
+  background-size: 20px 20px;
+  background-color: var(--paper);
+  border-radius: 6px;
+  cursor: crosshair;
+}
+.df-board { position: relative; margin: 8px; width: max-content; }
+.df-board canvas { position: absolute; left: 0; top: 0; display: block; }
+#dfOverlay { z-index: 5; }
+.df-coord {
+  flex: 0 0 auto; font-size: 11.5px; color: var(--ink); font-variant-numeric: tabular-nums;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 8px; margin-top: 6px;
+}
+
+/* 右栏 */
+.df-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.df-tab {
+  flex: 1; border: 1px solid var(--line); background: var(--panel);
+  border-radius: 6px 6px 0 0; padding: 6px 4px; cursor: pointer; font-size: 12.5px;
+}
+.df-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.df-tab-badge {
+  display: inline-block; min-width: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--paper-2); color: var(--ink); font-size: 10.5px;
+}
+.df-tab.active .df-tab-badge { background: rgba(255,255,255,.25); color: #fff; }
+.df-tabpane { flex: 1; overflow-y: auto; min-height: 0; }
+.df-footer { display: flex; gap: 8px; margin-top: 8px; }
+.df-footer .btn { flex: 1; }
+
+.df-mark-list, .df-repeat-list, .df-rev-list { display: flex; flex-direction: column; gap: 7px; }
+.df-mark {
+  border: 1px solid var(--line); border-radius: 7px; background: #fff; padding: 6px 8px;
+}
+.df-mark.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(156,74,47,.18); }
+.df-mark-head { display: flex; align-items: center; gap: 6px; cursor: pointer; flex-wrap: wrap; }
+.df-mark-no { font-size: 10.5px; color: var(--ink-soft); }
+.df-mark-pos { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.df-type-badge {
+  font-size: 10.5px; color: #fff; padding: 1px 7px; border-radius: 9px; font-weight: 600;
+}
+.df-mark .df-del { margin-left: auto; padding: 1px 7px; }
+.df-mark-loc { font-size: 11.5px; line-height: 1.6; margin: 4px 0; color: var(--ink); }
+.df-locate-row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 5px; }
+.df-locate-row .btn { padding: 2px 7px; font-size: 11px; }
+.df-rev-quick { color: var(--accent); }
+.df-note {
+  width: 100%; border: 1px solid var(--line); border-radius: 5px;
+  font-size: 11.5px; padding: 4px 6px; resize: vertical; font-family: inherit;
+}
+
+.df-rep { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 7px 9px; }
+.df-rep.crosscycle { border-left: 3px solid #29528c; }
+.df-rep.crossbatch { border-left: 3px solid var(--bad); }
+.df-rep-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.df-rep-count { margin-left: auto; font-size: 11px; color: var(--ink-soft); }
+.df-rep-body { font-size: 11.5px; line-height: 1.7; margin-top: 4px; }
+.df-rep-members { margin: 4px 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.df-rep-mem {
+  font-size: 10.5px; background: var(--paper-2); border: 1px solid var(--line);
+  border-radius: 9px; padding: 0 7px; color: var(--ink-soft);
+}
+.df-rep-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.df-side-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.df-side-grid canvas {
+  width: 100%; border: 1px solid var(--line); border-radius: 4px;
+  background: #fff; image-rendering: pixelated; cursor: pointer;
+}
+
+.df-revise-box {
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  padding: 8px 10px; margin-bottom: 10px;
+}
+.df-rev-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; display: flex; gap: 6px; align-items: center; }
+.df-diff { font-size: 11.5px; line-height: 1.6; margin: 6px 0; }
+#rvDiffCanvas { width: 100%; max-height: 200px; border: 1px solid var(--line); border-radius: 4px; background: #fff; image-rendering: pixelated; }
+.df-rev-item { border: 1px solid var(--line); border-radius: 7px; background: #fff; padding: 6px 8px; font-size: 11.5px; }
+
+/* 回标打印明细表 */
+.df-print-table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 6px; }
+.df-print-table th, .df-print-table td { border: 1px solid #888; padding: 2px 4px; text-align: center; }
+.df-print-table th { background: #eee; }
+#dfPrintCanvas { max-width: 100%; border: 1px solid #ccc; }
