@@ -1004,3 +1004,4 @@ tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
   body:not(.dl-printing) #dlPrintSheet { display: none; }
   body.dl-printing #dlPrintSheet { display: block; }
 }
+.dl-cand.dl-blocked { color: var(--bad); cursor: default; font-size: 11.5px; line-height: 1.5; }

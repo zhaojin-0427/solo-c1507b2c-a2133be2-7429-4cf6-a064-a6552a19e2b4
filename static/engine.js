@@ -227,9 +227,10 @@ const Engine = (() => {
     if (dl && Array.isArray(dl.lockedCells)) {
       for (const q of dl.lockedCells) {
         if (!Array.isArray(q) || q.length < 2) continue;
-        const r = clampInt(q[0], 0, Math.max(0, P - 1), -1);
-        const c = clampInt(q[1], 0, Math.max(0, E - 1), -1);
-        if (r < 0 || c < 0) continue;
+        // 越界 / 非整数锁格坐标直接丢弃（不钳制到边角，避免误锁末格）
+        const r = Number.isInteger(q[0]) ? q[0] : NaN;
+        const c = Number.isInteger(q[1]) ? q[1] : NaN;
+        if (!(r >= 0 && r < P && c >= 0 && c < E)) continue;
         const key = `${r},${c}`;
         if (lockSet.has(key)) continue;
         lockSet.add(key);

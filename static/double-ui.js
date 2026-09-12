@@ -71,7 +71,6 @@
     rebuildModel();
     renderAll();
   }
-
   function closeModal() {
     stopPlay();
     S.open = false;
@@ -106,6 +105,12 @@
     };
     setRadio('dlStruct', cfg.structure);
     setRadio('dlFoldSide', cfg.foldSide);
+    // 穿综锁定与主编辑区共用同一份状态：以主状态为准同步两边复选框
+    const locked = !!loom().state.lockThreading;
+    loom().state.lockThreading = locked;
+    $('#dlLockThreading').checked = locked;
+    const mainLock = $('#lockThreading');
+    if (mainLock) mainLock.checked = locked;
     $('#dlPickTo').value = d.picks;
     $('#dlWarpTo').value = d.ends;
     $('#dlFoldSideRow').classList.toggle('dl-dim', cfg.structure === 'tube');
@@ -311,10 +316,18 @@
     S.selected = -1; S.diff = null;
     renderCandidates();
     drawMergedOverlay();
-    const best = cands.find(c => c.key !== 'base');
-    toast(best
-      ? `找到 ${cands.length - 1} 个候选：最少错误 ${best.errors}、改动 ${best.changes} 格`
-      : '没有在锁定条件下找到可只改联结 / 踩踏 / 升综的修复方案');
+    const blocked = cands.find(c => c.blocked);
+    const best = cands.find(c => c.key !== 'base' && !c.blocked);
+    if (best) {
+      toast(`找到 ${cands.filter(c => c.key !== 'base' && !c.blocked).length} 个候选：` +
+        `最少错误 ${best.errors}、改动 ${best.changes} 格`);
+    } else if (blocked) {
+      const shafts = [...new Set(blocked.blocked.flatMap(b => b.shafts))]
+        .map(s => s + 1).join('、');
+      toast(`无法只改联结 / 踩踏 / 升综修复：综框 ${shafts} 上混穿了两层经，需调整穿综`, 3600);
+    } else {
+      toast('当前没有可在锁定条件下修复的层间错误（可能已是最优）');
+    }
   }
 
   function renderCandidates() {
@@ -326,6 +339,16 @@
       return;
     }
     S.candidates.forEach((c, i) => {
+      if (c.blocked) {
+        const row = document.createElement('div');
+        row.className = 'dl-cand dl-blocked';
+        const shafts = [...new Set(c.blocked.flatMap(b => b.shafts))].map(s => s + 1).join('、');
+        const picks = c.blocked.map(b => b.pick + 1).join('、');
+        row.title = '同综框混穿两层经时，踏板 / 升综列无法同时满足两层，需改穿综';
+        row.textContent = `✗ 第 ${picks} 纬无法修复：综框 ${shafts} 混穿两层经（需调整穿综）`;
+        box.appendChild(row);
+        return;
+      }
       const row = document.createElement('label');
       row.className = 'dl-cand' + (i === S.selected ? ' sel' : '') + (c.key === 'base' ? ' base' : '');
       const chk = document.createElement('input');
@@ -342,26 +365,48 @@
       row.append(chk, txt);
       box.appendChild(row);
     });
-    $('#dlAdopt').disabled = S.selected < 0 || S.candidates[S.selected].key === 'base';
+    const sel = S.candidates[S.selected];
+    $('#dlAdopt').disabled = S.selected < 0 || !sel || sel.key === 'base' || !!sel.blocked;
   }
 
   function selectCandidate(i) {
     S.selected = i;
     const c = S.candidates[i];
-    S.diff = c.key === 'base' ? null : DC().diffGrid(draft(), c.patch);
+    S.diff = (!c || c.key === 'base' || c.blocked || !c.patch)
+      ? null : DC().diffGrid(draft(), c.patch);
     drawMergedOverlay();
     renderCandidates();
   }
 
-  function adoptCandidate() {
+  /**
+   * 采纳候选：生成新草稿 → 立即 POST /api/drafts 另存（不覆盖原稿）→
+   * 载入新稿（savedId 指向新记录）。
+   */
+  async function adoptCandidate() {
     const c = S.candidates[S.selected];
-    if (!c || c.key === 'base') return;
+    if (!c || c.key === 'base' || c.blocked) return;
     const nd = DC().candidateDraft(draft(), c.patch);
     const baseName = ($('#draftName') && $('#draftName').value.trim()) || '未命名草稿';
     const name = `${baseName} 双层修复`;
-    window.loadDraft(nd, name, null);
-    toast(`已采纳候选并另存为新草稿「${name}」，原稿未改动；确认后请手动保存。`, 3400);
-    closeModal();
+    $('#dlAdopt').disabled = true;
+    try {
+      const res = await fetch('/api/drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, data: nd }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || res.status);
+      }
+      const saved = await res.json();
+      window.loadDraft(nd, saved.name, saved.id);
+      toast(`已采纳并另存为新草稿「${saved.name}」#${saved.id}（原稿未改动）`, 3600);
+      closeModal();
+    } catch (e) {
+      $('#dlAdopt').disabled = false;
+      toast('另存失败：' + (e.message || e) + '（候选未丢失，可重试）', 3600);
+    }
   }
 
   /* ------------------------------- 画布尺寸 ---------------------------- */
@@ -985,6 +1030,20 @@
     $('#dlSearch').addEventListener('click', runSearch);
     $('#dlAdopt').addEventListener('click', adoptCandidate);
     $('#dlPrint').addEventListener('click', doPrint);
+
+    // 穿综锁定：与主编辑区侧边栏“锁定穿综”双向同步
+    $('#dlLockThreading').addEventListener('change', (e) => {
+      loom().state.lockThreading = e.target.checked;
+      const main = $('#lockThreading');
+      if (main) main.checked = e.target.checked;
+      toast(e.target.checked ? '已锁定穿综（主编辑区同步）' : '已解除穿综锁定');
+    });
+    // 主编辑区侧边栏改动时同步回弹窗
+    const mainLock = $('#lockThreading');
+    if (mainLock) mainLock.addEventListener('change', (e) => {
+      loom().state.lockThreading = e.target.checked;
+      $('#dlLockThreading').checked = e.target.checked;
+    });
 
     $('#dlPlay').addEventListener('click', startPlay);
     $('#dlNext').addEventListener('click', () => stepPick(1));

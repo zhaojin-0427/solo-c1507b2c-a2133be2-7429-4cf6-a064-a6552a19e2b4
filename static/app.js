@@ -1162,8 +1162,7 @@ function loadDraft(d, name, id) {
   state.selection = null;
   state.clipboard = null;
   state.lockThreading = $('#lockThreading').checked = false;
-  state.lockTieup = $('#lockTieup').checked = false;
-  state.compareB = null;
+  state.lockTieup = $('#lockTieup').checked = false;  state.compareB = null;
   $('#cmpSource').value = '';
   $('#cmpResult').innerHTML = '<p class="hint">将当前草稿与已保存方案并排比较。</p>';
   afterStructural();

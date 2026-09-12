@@ -484,21 +484,32 @@ const DoubleCore = (() => {
 
     if (!dl.enabled) return rank(candidates).slice(0, limit);
 
-    // 逐纬收集跨层综框要求（只在存在区外越序的纬上搜索；锁定纬不动）
-    const offending = [];
+    // 逐纬收集修复要求（只在存在区外越序、且未锁定的纬上搜索）
+    const requirements = [];
     for (let p = 0; p < d.picks; p++) {
       if (lockedPicks[p]) continue;
-      const cross = [];
-      for (let e = 0; e < d.ends; e++) {
-        const cell = base.grid[p][e];
-        if (cell.cross && !cell.locked) cross.push(cell);
-      }
-      if (cross.some(c => c.wrong)) offending.push({ pick: p, cells: cross });
+      const hasWrong = base.grid[p].some(c => c.cross && c.wrong && !c.locked);
+      if (hasWrong) requirements.push(pickRequirements(base, d, p, lockedPicks));
     }
-    if (!offending.length) return rank(candidates).slice(0, limit);
+    if (!requirements.length) return rank(candidates).slice(0, limit);
 
-    if (base.dobbyOn) searchDobby(d, dl, base, offending, lockedPicks, candidates, seen, maxCandidates);
-    else searchTreadle(d, dl, base, offending, lockedPicks, candidates, seen, maxCandidates);
+    // 穿综分层冲突的纬：同综框上穿有分属两层的经，任何踏板/升综列都无法
+    // 同时满足，只能通过改穿综修复（本工具不动穿综）——明确返回说明。
+    const conflictPicks = requirements.filter(r => r.conflict);
+    if (conflictPicks.length) {
+      candidates.push({
+        key: 'threading-conflict', patch: null, changes: 0,
+        errors: base.errors, warns: base.warns, maxFloat: baseMaxFloat,
+        blocked: conflictPicks.map(r => ({
+          pick: r.pick, shafts: r.conflictShafts,
+        })),
+      });
+    }
+    const searchable = requirements.filter(r => !r.conflict);
+    if (!searchable.length) return rank(candidates).slice(0, limit);
+
+    if (base.dobbyOn) searchDobby(d, dl, base, searchable, lockedPicks, candidates, seen, maxCandidates);
+    else searchTreadle(d, dl, base, searchable, lockedPicks, candidates, seen, maxCandidates);
 
     return rank(candidates).slice(0, limit);
   }
@@ -525,23 +536,66 @@ const DoubleCore = (() => {
       a.warns - b.warns);
   }
 
+  /**
+   * 修复某纬所需的综框升落要求。
+   * 关键：升综以“综框”为单位，同综框上的每根经状态相同。因此一个综框的要求
+   * 由该纬上它需要扮演的角色决定——若该综框穿入的经全属一层，要求唯一；
+   * 若同综框混穿两层经，则该纬无论升降都会有一层出错（穿综分层冲突）。
+   *
+   * 对一个“层内一致”的综框（穿入经全部属于层 L）：
+   *   - 该纬就是 L 层纬：属于层内交织，升落由本层组织决定（不强制）；
+   *   - 该纬是另一层纬：跨层分离要求固定
+   *       上层经综框在下层纬时必须升起（v=1）；
+   *       下层经综框在上层纬时必须落下（v=0）。
+   *
+   * 区内（zoned）跨层经为可选接结，放入 optional（多臂枚举用；踏板模式不枚举）。
+   */
+  function pickRequirements(base, d, p) {
+    const dl = base.dl;
+    const lay = dl.pickLayer[p] ? 1 : 0;
+    const firm = new Map();
+    const optional = new Map();
+    const conflictShafts = new Set();
+
+    // 综框 -> 穿入经的层集合（层内一致才能被踏板/升综修复）
+    const shaftLayers = new Map();
+    for (let e = 0; e < d.ends; e++) {
+      const s = d.threading[e];
+      if (s < 0 || s >= d.shafts) continue;
+      if (!shaftLayers.has(s)) shaftLayers.set(s, new Set());
+      shaftLayers.get(s).add(dl.warpLayer[e] ? 1 : 0);
+    }
+
+    // 只看该纬的跨层经：它们是双层分离约束的来源
+    base.grid[p].forEach((cell) => {
+      if (!cell.cross) return;
+      const sh = cell.trace.shaft;
+      if (sh < 0) return;
+      if (shaftLayers.get(sh).size > 1) { conflictShafts.add(sh); return; }
+      if (cell.locked) return;
+      if (cell.zoned) optional.set(sh, cell.expect);
+      else firm.set(sh, cell.expect);
+    });
+
+    return {
+      pick: p, lay,
+      firm, optional,
+      conflict: conflictShafts.size > 0,
+      conflictShafts: [...conflictShafts],
+    };
+  }
+
   /** 多臂模式：逐违规纬枚举行变体（必改跨层 + 区内可选接结），贪心组合。 */
   function searchDobby(d, dl, base, offending, lockedPicks, candidates, seen, maxCandidates) {
     const S = d.shafts;
     const origRow = (p) => (d.dobby.cells[p] || new Array(S).fill(false)).slice();
 
     // 每纬的局部行变体：{ row:[bool], change:int }
-    // firm：所有区外异层经的综框须满足分离顺序；optional：区内异层经可接结
-    const perPick = offending.map(({ pick, cells }) => {
+    const perPick = offending.map((req) => {
+      const pick = req.pick;
       const orig = origRow(pick);
-      const firm = new Map();
-      const optional = new Map();
-      for (const cell of cells) {
-        const sh = cell.trace.shaft;
-        if (sh < 0) continue;
-        if (cell.zoned) optional.set(sh, cell.expect);
-        else firm.set(sh, cell.expect);
-      }
+      const firm = req.firm;
+      const optional = req.optional;
       const variants = [{ row: orig.slice(), change: 0 }];
       const firmRow = orig.slice();
       let firmChange = 0;
@@ -569,7 +623,8 @@ const DoubleCore = (() => {
           push(row);
         }
       }
-      // 每个变体先按本纬错误数预筛，保留前 8
+      // 变体按本纬改动数预筛，保留前 8
+      variants.sort((a, b) => a.change - b.change);
       return { pick, variants: variants.slice(0, 8) };
     });
 
@@ -613,26 +668,14 @@ const DoubleCore = (() => {
   }
 
   /** 踏板模式：优先复用现成踏板；必要时把未被锁定纬使用的踏板改作新组合。 */
-  function searchTreadle(d, dl, base, offending, lockedPicks, candidates, seen, maxCandidates) {
+  function searchTreadle(d, dl, base, requirements, lockedPicks, candidates, seen, maxCandidates) {
     const S = d.shafts, T = d.treadles;
     const lockSet = lockList(d);
     const lockedTreadles = new Set();
     d.treadling.forEach((t, p) => { if (lockedPicks[p] && t >= 0 && t < T) lockedTreadles.add(t); });
     const colOf = (t) => Array.from({ length: S }, (_, s) => !!(d.tieup[s] && d.tieup[s][t]));
 
-    // 每个违规纬期望的综框列（覆盖全部区外异层经；区内接结踏板模式不枚举）
-    const wants = offending.map(({ pick, cells }) => {
-      const want = new Map();
-      let conflict = false;
-      for (const cell of cells) {
-        if (cell.zoned) continue;
-        const sh = cell.trace.shaft;
-        if (sh < 0) continue;
-        if (want.has(sh) && want.get(sh) !== cell.expect) conflict = true;
-        want.set(sh, !!cell.expect);
-      }
-      return { pick, want, conflict };
-    });
+    const wants = requirements;
 
     const tried = new Set();
     const addCandidate = (treadling, tieup, change) => {
@@ -649,20 +692,18 @@ const DoubleCore = (() => {
       });
     };
 
-    // 方案一：逐纬改用现成踏板。不预设期望列：逐个尝试未被锁定纬占用的踏板，
-    // 交由评估（错误数 / 浮线）排序——恢复到原正确踏板的方案自然胜出。
-    for (const { pick, want, conflict } of wants) {
-      if (conflict) continue;
+    // 方案一：逐纬改用现成踏板。不预设期望列：逐个尝试未被锁定纬占用的踏板
+    // （重复穿综的经要求一致，恢复到原正确踏板的方案自然胜出）。
+    for (const req of wants) {
+      const pick = req.pick;
       const cur = d.treadling[pick];
       for (let t = 0; t < T; t++) {
-        if (lockedTreadles.has(t)) continue;
+        if (t === cur || lockedTreadles.has(t)) continue;
         const treadling = d.treadling.slice();
         treadling[pick] = t;
-        const change = (t === cur) ? 0 : 1;
-        if (t !== cur && !tried.has(pick + ':' + t)) {
-          tried.add(pick + ':' + t);
-          addCandidate(treadling, d.tieup.map(r => r.slice()), change);
-        }
+        if (tried.has(pick + ':' + t)) continue;
+        tried.add(pick + ':' + t);
+        addCandidate(treadling, d.tieup.map(r => r.slice()), 1);
       }
     }
 
@@ -673,12 +714,12 @@ const DoubleCore = (() => {
     if (freeTreadles.length) {
       // 按期望列分组（最多取前 3 组）
       const groups = new Map();
-      for (const w of wants) {
-        if (w.conflict || !w.want.size) continue;
-        const k = [...w.want.entries()].sort((a, b) => a[0] - b[0])
+      for (const req of wants) {
+        if (!req.firm.size) continue;
+        const k = [...req.firm.entries()].sort((a, b) => a[0] - b[0])
           .map(([s, v]) => `${s}:${v ? 1 : 0}`).join('|');
-        if (!groups.has(k)) groups.set(k, { want: w.want, picks: [] });
-        groups.get(k).picks.push(w.pick);
+        if (!groups.has(k)) groups.set(k, { want: req.firm, picks: [] });
+        groups.get(k).picks.push(req.pick);
       }
       let usedGroups = 0;
       for (const g of groups.values()) {
@@ -702,20 +743,21 @@ const DoubleCore = (() => {
       }
     }
 
-    // 方案三：现有踏板无法承载时，新增一个踏板（每纬期望列各不相同则各加一个，
-    // 上限 2 个），只改这些违规纬的踩踏。
+    // 方案三：现有踏板无法承载时，新增踏板。新踏板列必须同时满足它将服务的
+    // 全部纬次：跨层分离（firm）+ 各纬的层内交织（取这些纬所需综框升态的并集；
+    // 同层穿法一致时并集无冲突）。
     {
       const addGroups = new Map();
-      for (const w of wants) {
-        if (w.conflict || !w.want.size) continue;
+      for (const req of wants) {
+        if (!req.firm.size) continue;
         // 与现有踏板列完全一致的组合无需新增（方案一已覆盖）
         const exact = [...Array(T).keys()].find(t =>
-          [...w.want.entries()].every(([sh, v]) => colOf(t)[sh] === v));
-        const k = [...w.want.entries()].sort((a, b) => a[0] - b[0])
+          [...req.firm.entries()].every(([sh, v]) => colOf(t)[sh] === v));
+        const k = [...req.firm.entries()].sort((a, b) => a[0] - b[0])
           .map(([s, v]) => `${s}:${v ? 1 : 0}`).join('|');
         if (exact !== undefined) continue;
-        if (!addGroups.has(k)) addGroups.set(k, { want: w.want, picks: [] });
-        addGroups.get(k).picks.push(w.pick);
+        if (!addGroups.has(k)) addGroups.set(k, { reqs: [] });
+        addGroups.get(k).reqs.push(req);
       }
       const groupsArr = [...addGroups.values()].slice(0, 2);
       if (groupsArr.length) {
@@ -729,9 +771,42 @@ const DoubleCore = (() => {
         let pickChange = 0, tieChange = 0;
         groupsArr.forEach((g, i) => {
           const slot = T + i;
-          for (const [sh, v] of g.want) { tieup[sh][slot] = v; tieChange++; }
-          for (const p of g.picks) {
-            if (treadling[p] !== slot) { treadling[p] = slot; pickChange++; }
+          const col = new Array(S).fill(false);
+          const lay = g.reqs[0].lay;
+          const offendingPicks = new Set(wants.map(r => r.pick));
+          // 同层其它“完好”纬所用踏板列：用于推断新踏板的层内升态
+          const otherCols = [];
+          for (let pp = 0; pp < d.picks; pp++) {
+            if ((dl.pickLayer[pp] ? 1 : 0) !== lay) continue;
+            if (offendingPicks.has(pp)) continue;
+            const tt = d.treadling[pp];
+            if (tt >= 0 && tt < T) otherCols.push(colOf(tt));
+          }
+          // 综框 -> 穿入经的层集合（层内一致才参与推断）
+          const shaftLayers = new Map();
+          for (let e = 0; e < d.ends; e++) {
+            const sh = d.threading[e];
+            if (sh < 0 || sh >= S) continue;
+            if (!shaftLayers.has(sh)) shaftLayers.set(sh, new Set());
+            shaftLayers.get(sh).add(dl.warpLayer[e] ? 1 : 0);
+          }
+          // 跨层要求优先（同组各纬一致）
+          for (const [sh, v] of g.reqs[0].firm) col[sh] = v;
+          // 层内综框：保证同层经在“其它同层纬 + 本踏板”间既有升也有落
+          for (let sh = 0; sh < S; sh++) {
+            if (g.reqs[0].firm.has(sh)) continue;
+            const layers = shaftLayers.get(sh);
+            if (!layers || layers.size !== 1) continue;
+            if ([...layers][0] !== lay) continue;
+            if (!otherCols.length) { col[sh] = !!(d.tieup[sh] && d.tieup[sh][d.treadling[g.reqs[0].pick]]); continue; }
+            const ups = otherCols.filter(c => c[sh]).length;
+            if (ups === otherCols.length) col[sh] = false; // 别处全升 → 此处落
+            else if (ups === 0) col[sh] = true;             // 别处全落 → 此处升
+            else { const ot = d.treadling[g.reqs[0].pick]; col[sh] = !!(d.tieup[sh] && d.tieup[sh][ot]); }
+          }
+          for (let s = 0; s < S; s++) { tieup[s][slot] = col[s]; tieChange++; }
+          for (const req of g.reqs) {
+            if (treadling[req.pick] !== slot) { treadling[req.pick] = slot; pickChange++; }
           }
         });
         const patch = { mode: 'treadle', treadling, tieup, treadles: newT };
@@ -774,6 +849,8 @@ const DoubleCore = (() => {
         nd.dobby.cells[p | 0] = row.slice();
       }
     } else {
+      // 踏板数可能增加（方案三新增踏板）；必须同步 nd.treadles，否则踩踏值越界
+      nd.treadles = patch.treadles;
       nd.treadling = patch.treadling.slice();
       nd.tieup = patch.tieup.map(r => r.slice());
       if (nd.dobby) nd.dobby.enabled = false;

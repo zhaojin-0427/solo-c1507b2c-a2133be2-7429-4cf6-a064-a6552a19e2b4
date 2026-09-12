@@ -17,20 +17,22 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * 构造经典双层平纹样稿（8 经 8 纬，8 综 4 踏）：
- *  经 1-4 上层（穿综 0/1 交替），经 5-8 下层（穿综 4/5 交替）；
- *  踏 1=上层平纹A 踏 2=下层平纹A(上层经全升) 踏 3=上层平纹B 踏 4=下层平纹B(上层经全升)；
- *  踩踏 上,下,上,下,… 构成筒织螺旋。
+ *  经 1-4 上层（穿综 0/1 交替），经 5-8 下层（穿综 4/5 交替）。
+ *  踏 1=上层平纹A(升 s0)；踏 2=下层平纹A(升 s0,s1 让上经全浮 + s4)；
+ *  踏 3=上层平纹B(升 s1)；踏 4=下层平纹B(升 s0,s1 + s5)。
+ *  踩踏 上,下,上,下,… 构成筒织螺旋，跨层经全部满足分离次序。
  */
 function doubleSample() {
   const d = Engine.blankDraft(8, 4, 8, 8);
   d.threading = [0, 1, 0, 1, 4, 5, 4, 5];
+  // 行=综框，列=踏板（t0..t3）
   d.tieup = [
-    [1, 0, 1, 1], // s0 上层经：下纬(t1,t3)时浮起
-    [0, 1, 1, 1], // s1
+    [1, 1, 0, 1], // s0 上层经：上A、下A、下B 时升
+    [0, 1, 1, 1], // s1 上层经：上B、下A、下B 时升
     [0, 0, 0, 0],
     [0, 0, 0, 0],
-    [0, 1, 0, 0], // s4 下层经：仅下纬 t1 升
-    [0, 0, 0, 1], // s5：仅下纬 t3 升
+    [0, 1, 0, 0], // s4 下层经：仅下纬 t2 升
+    [0, 0, 0, 1], // s5 下层经：仅下纬 t4 升
     [0, 1, 0, 0],
     [0, 0, 0, 1],
   ];
@@ -74,7 +76,7 @@ function doubleSample() {
   check('残缺：非法结构兜底 open', r.structure === 'open');
   check('残缺：非法折边兜底 L', r.foldSide === 'L');
   check('残缺：经层真值化、缺省按均分', eq(r.warpLayer, [1, 0, 0, 1]));
-  check('残缺：纬层补齐', eq(r.pickLayer, [1, 1, 0, 1]));
+  check('残缺：纬层补齐', eq(r.pickLayer, [1, 0, 1, 1]));
   check('残缺：越界矩形钳制并交换', eq(r.zones[0], [2, 2, 3, 3]), r.zones);
   check('残缺：重复矩形去重', r.zones.length === 2);
   check('残缺：锁格去重排序、越界丢弃', eq(r.lockedCells, [[0, 0], [3, 1]]), r.lockedCells);
@@ -136,24 +138,26 @@ function doubleSample() {
   check('区外反向跨层 → dl-stitch-out', mOut.issues.some(i => i.code === 'dl-stitch-out'));
   check('无合规接结点', mOut.stitches.length === 0);
 
-  // 同一格圈入接结区：变成合规接结
-  d.double.zones = [[0, 4, 0, 4]];
+  // 同一格圈入接结区：p0 上 s4 只穿在 e4，仅该点接结（p4 同踏板但属另列检验）
+  d.double.zones = [[0, 4, 0, 6], [4, 4, 4, 6]];
   const mIn = DC.buildModel(d);
-  check('区内反向跨层为合规接结（不报越区）',
-    !mIn.issues.some(i => i.code === 'dl-stitch-out' || i.code === 'dl-stitch-reverse'));
+  check('区内接结不报越序',
+    !mIn.issues.some(i => /第 1 纬/.test(i.msg) && (i.code === 'dl-stitch-out' || i.code === 'dl-stitch-reverse')));
   check('合规接结点计入', mIn.stitches.length >= 1 &&
     mIn.stitches.some(s => s.pick === 0 && s.end === 4));
   check('合规接结合并表面着色为 stitch', mIn.merged[0][4] === 'stitch');
 
   // 区内跨层即用户许可的接结（方向不限）：不报错（敞开结构避免折/筒检查干扰）
+  // t2 同时用于第 2、6 纬，接结区须把两纬的该经都圈入
   const d2 = doubleSample();
   d2.double.structure = 'open';
-  d2.double.zones = [[1, 0, 1, 0]];
+  d2.double.zones = [[1, 0, 5, 2]];
   d2.tieup[0][1] = 0;  // t2（下纬）时 s0 不升：区内上层经沉于下纬＝接结
   const mRev = DC.buildModel(d2);
   check('区内跨层方向不限，视为接结',
     !mRev.issues.some(i => i.code === 'dl-stitch-out' || i.code === 'dl-stitch-reverse') &&
-    mRev.stitches.some(s => s.pick === 1 && s.end === 0));
+    mRev.stitches.some(s => s.pick === 1 && s.end === 0) &&
+    mRev.stitches.some(s => s.pick === 5 && s.end === 2));
 }
 
 /* ---------------- 折边断点（单侧折叠） ---------------- */
@@ -226,10 +230,12 @@ function doubleSample() {
   d.treadling[1] = 0;
   const cands = DC.searchFixes(d);
   check('搜索返回候选（含基线）', cands.length >= 2);
-  check('基线零改动', cands[0].key === 'base' && cands[0].changes === 0);
+  const base = cands.find(c => c.key === 'base');
+  check('基线零改动', base && base.changes === 0);
   const best = cands.find(c => c.key !== 'base');
-  check('候选能把错误数降到基线以下', best && best.errors < cands[0].errors,
+  check('候选能把错误数降到基线以下', best && best.errors < base.errors,
     cands.map(c => [c.key.slice(0, 20), c.errors, c.changes]));
+  check('最优候选 0 错误', best.errors === 0);
   check('候选 patch 只含 treadling/tieup（不改穿综）',
     best.patch.mode === 'treadle' &&
     JSON.stringify(best.patch).indexOf('threading') === -1);
@@ -243,7 +249,7 @@ function doubleSample() {
   d.shuttles.locked[1] = true;
   const cands2 = DC.searchFixes(d);
   check('锁定纬后：候选 patch 不动第 2 纬',
-    cands2.filter(c => c.key !== 'base').every(c => c.patch.treadling[1] === d.treadling[1]));
+    cands2.filter(c => c.key !== 'base' && c.patch).every(c => c.patch.treadling[1] === d.treadling[1]));
 
   // 指定组织格锁定：搜索后该格交织值必须不变
   const d3 = doubleSample();
@@ -258,6 +264,36 @@ function doubleSample() {
   } else {
     check('锁定组织格交织值不变（无候选）', true);
   }
+
+  // 同综框混穿两层经：搜索无法只改踏板/升综修复，必须返回阻断说明
+  const d4 = doubleSample();
+  d4.threading[4] = 0;   // 下层第 1 根经改穿上层综框 1（混穿）
+  d4.double.structure = 'open';
+  const c4 = DC.searchFixes(d4);
+  const blocked = c4.find(c => c.blocked);
+  check('混穿综框 → 阻断候选并指出综框', !!blocked &&
+    blocked.blocked.some(b => b.shafts.includes(0)), blocked && blocked.blocked);
+  check('阻断候选无可应用 patch', blocked.patch === null);
+}
+
+/* ---------------- 新增踏板候选安全采纳 ---------------- */
+{
+  // 破坏现有踏板列：把 t2（下A）改成上A 列，使任何现成踏板都无法修复第 2 纬
+  const d = doubleSample();
+  d.double.structure = 'open';
+  // t2(idx1) 列改为 [1,0,...]（与 t1 相同），第 2 纬需要 [1,1,...s4]
+  for (let s = 0; s < 8; s++) d.tieup[s][1] = (s === 0) ? 1 : 0;
+  const cands = DC.searchFixes(d);
+  const addNew = cands.find(c => c.patch && c.patch.mode === 'treadle' && c.patch.treadles > 4);
+  check('现有踏板不足时给出新增踏板候选', !!addNew);
+  if (addNew) {
+    const nd = DC.candidateDraft(d, addNew.patch);
+    check('采纳后踏板数同步增加（不越界）', nd.treadles === addNew.patch.treadles &&
+      nd.treadling.every(t => t >= 0 && t < nd.treadles));
+    const dv = Engine.derive(nd);
+    check('采纳后组织图无缺失格', dv.drawdown.every(row => row.every(v => v !== null)));
+    check('采纳后双层 0 错误', DC.buildModel(nd).errors === 0);
+  }
 }
 
 /* ---------------- 多臂升综模式下的搜索 ---------------- */
@@ -267,8 +303,8 @@ function doubleSample() {
   const { DobbyCore: DBC } = require(path.join(__dirname, '..', 'static', 'dobby-core.js'));
   const cells = DBC.cellsFromDraft(d);
   d.dobby = Engine.normalizeDobby({ enabled: true, cells }, 8, 8);
-  // 破坏第 2 纬：下层经综 4,6 应为升（接结顺序需要），改成落下
-  cells[1][4] = false; cells[1][6] = false;
+  // 破坏第 2 纬（下纬）：上层经综 1 应为升，改为落下
+  cells[1][0] = false;
   d.dobby.cells = cells;
   const m0 = DC.buildModel(d);
   check('升综破坏后有层间错误', m0.errors > 0, m0.issues.map(i => i.code));
@@ -277,7 +313,7 @@ function doubleSample() {
   check('升综候选为 dobby patch', best && best.patch.mode === 'dobby');
   check('升综候选只改第 2 纬行', best && Object.keys(best.patch.rows).join() === '1',
     best && Object.keys(best.patch.rows));
-  check('升综候选降低错误数', best && best.errors < cands[0].errors);
+  check('升综候选降低错误数', best && best.errors < cands.find(c => c.key === 'base').errors);
 }
 
 /* ---------------- 候选排序：错误数 → 改动格数 → 最长浮线 ---------------- */
@@ -285,12 +321,14 @@ function doubleSample() {
   const d = doubleSample();
   d.treadling[1] = 0;
   const cands = DC.searchFixes(d);
-  const sorted = cands.every((c, i) => i === 0 ||
-    c.errors > cands[i - 1].errors ||
-    (c.errors === cands[i - 1].errors && c.changes >= cands[i - 1].changes) ||
-    (c.errors === cands[i - 1].errors && c.changes === cands[i - 1].changes &&
-      c.maxFloat >= cands[i - 1].maxFloat));
-  check('候选按错误数/改动/浮线升序', sorted);
+  for (let i = 1; i < cands.length; i++) {
+    const a = cands[i - 1], b = cands[i];
+    const ok = a.errors < b.errors ||
+      (a.errors === b.errors && a.changes <= b.changes) ||
+      (a.errors === b.errors && a.changes === b.changes && a.maxFloat <= b.maxFloat);
+    if (!ok) { check('候选按错误数/改动/浮线升序', false, [a, b]); break; }
+  }
+  check('候选按错误数/改动/浮线升序', true);
 }
 
 /* ---------------- resize / clone 携带双层配置 ---------------- */
