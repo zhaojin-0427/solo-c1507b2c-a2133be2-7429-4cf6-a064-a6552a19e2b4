@@ -658,7 +658,9 @@ function drawPlayback(ctx, now) {
   if (!state.playing) return;
   const d = state.draft, L = state.layout, A = state.analysis;
   const p = state.playPick;
-  const t = d.treadling[p];
+  // 升综矩阵驱动时踩踏序列不再决定组织，不再高亮踏板列
+  const dobbyOn = !!(d.dobby && d.dobby.enabled);
+  const t = dobbyOn ? -1 : d.treadling[p];
   const Rd = L.regions.drawdown;
 
   // 当前纬整行
@@ -1106,6 +1108,7 @@ function afterEdit() {
   refreshPreviews();
   refreshCompareIfActive();
   if (window.__shuttleRefresh) window.__shuttleRefresh();
+  if (window.__dobbyRefresh) window.__dobbyRefresh();
   scheduleAutosave();
 }
 
@@ -1120,6 +1123,7 @@ function afterStructural() {
   refreshTreadleBrush();
   refreshCompareIfActive();
   if (window.__shuttleRefresh) window.__shuttleRefresh();
+  if (window.__dobbyRefresh) window.__dobbyRefresh();
   scheduleAutosave();
 }
 
@@ -1442,6 +1446,7 @@ function stepPick(delta) {
 
 function updatePlayInfo() {
   const d = state.draft, p = state.playPick, A = state.analysis;
+  const dobbyOn = !!(d.dobby && d.dobby.enabled);
   const t = d.treadling[p];
   const lifted = [...A.derived.lifted[p]].map(s => s + 1).join('、') || '无';
   let shTxt = '';
@@ -1464,7 +1469,9 @@ function updatePlayInfo() {
     if (parks.length) shTxt += `　停放：${parks.join(' ')}`;
   }
   $('#playInfo').innerHTML =
-    `第 <b>${p + 1}</b>/${d.picks} 纬　踏板 <b>${t >= 0 ? t + 1 : '—'}</b>　升起综框：<b>${lifted}</b>${shTxt}`;
+    `第 <b>${p + 1}</b>/${d.picks} 纬　` +
+    (dobbyOn ? '升综 <b>多臂</b>' : `踏板 <b>${t >= 0 ? t + 1 : '—'}</b>`) +
+    `　升起综框：<b>${lifted}</b>${shTxt}`;
 }
 
 /* ------------------------------- 缩放 / 平移 -------------------------- */
@@ -1698,6 +1705,8 @@ function normalizeDraft(d) {
   const merged = { ...base, ...d };
   merged.palette = Array.isArray(d.palette) && d.palette.length ? d.palette : base.palette;
   merged.shuttles = Engine.normalizeShuttles(d.shuttles, merged.picks);
+  // 升综计划按草稿实际纬数 × 综框数规整；旧草稿缺该字段时补“未启用”的默认矩阵
+  merged.dobby = Engine.normalizeDobby(d.dobby, merged.picks, merged.shafts);
   return merged;
 }
 

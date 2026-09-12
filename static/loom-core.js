@@ -342,11 +342,18 @@ const LoomCore = (() => {
   function fingerprint(snapshot, params) {
     const q = normalizeParams(params);
     const gpm = normalizeYarnGpm(q.yarnGpm, (snapshot.palette || []).length);
+    // 升综矩阵启用时组织由它驱动，指纹须包含其状态与内容
+    const db = snapshot.dobby;
+    const dobbySig = (db && db.enabled)
+      ? [1, db.deviceShafts, db.maxLift, db.maxSwitch,
+         (db.cells || []).map(r => r.map(v => (v ? 1 : 0)).join('')).join(',')]
+      : 0;
     return JSON.stringify([
       snapshot.shafts, snapshot.treadles, snapshot.ends, snapshot.picks,
       snapshot.threading, snapshot.treadling,
       (snapshot.tieup || []).map(r => r.map(v => (v ? 1 : 0))),
       snapshot.warpColor, snapshot.weftColor,
+      dobbySig,
       q.finishWidth, q.finishLength, q.warpShrink, q.weftShrink,
       q.warpDensity, q.weftDensity, q.reedDents, q.wasteFront, q.wasteBack,
       gpm,

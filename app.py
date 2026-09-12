@@ -292,8 +292,20 @@ def snapshot_repeats(snapshot):
     threading = snapshot.get("threading") or []
     treadling = snapshot.get("treadling") or []
     warp = period_seq(threading) or None
-    weft = period_seq(treadling) or None
+    # 升综矩阵启用时组织由它驱动，纬向周期取升综行周期（与前端一致）
+    dobby = snapshot.get("dobby")
+    if isinstance(dobby, dict) and dobby.get("enabled") \
+            and isinstance(dobby.get("cells"), list) and dobby["cells"]:
+        weft = period_rows(dobby["cells"]) or None
+    else:
+        weft = period_seq(treadling) or None
     return warp, weft
+
+
+def period_rows(cells):
+    """升综矩阵行序列（每行视为一个组合）的最小周期。"""
+    keys = ["".join("1" if v else "0" for v in (row or [])) for row in cells]
+    return period_seq(keys)
 
 
 def period_seq(seq):

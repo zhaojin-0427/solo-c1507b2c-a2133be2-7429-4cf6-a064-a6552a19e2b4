@@ -539,6 +539,87 @@
     </div>
   </div>
 
+  <!-- ============================= 多臂织机升综计划 ============================= -->
+  <div id="dobbyModal" class="modal hidden">
+    <div class="modal-card db-card">
+      <div class="modal-head">
+        <h2>多臂织机升综计划</h2>
+        <button class="btn close" data-close-db>&times;</button>
+      </div>
+      <div class="db-layout">
+        <!-- 左：设备 / 生成 / 批量 / 校验 / 还原 -->
+        <div class="db-col db-col-left">
+          <div class="db-sub">① 设备与限制</div>
+          <div class="db-dims">
+            <label>设备综框数 <input id="dbDeviceShafts" type="number" min="1" max="24" /></label>
+            <label>单纬最大升综 <input id="dbMaxLift" type="number" min="1" max="24" /></label>
+            <label>相邻纬最大切换 <input id="dbMaxSwitch" type="number"  min="1" max="24" /></label>
+          </div>
+
+          <div class="db-sub" style="margin-top:10px">② 升综矩阵</div>
+          <div class="db-row">
+            <button id="dbGenerate" class="btn tiny btn-primary">从当前穿综·联结·踩踏生成</button>
+            <button id="dbToggle" class="btn tiny">停用升综驱动</button>
+          </div>
+          <p class="hint" id="dbStatus"></p>
+
+          <div class="db-sub" style="margin-top:10px">③ 批量工具（纬段）</div>
+          <div class="db-batch">
+            <div class="db-row">
+              <label>起始纬 <input id="dbFrom" type="number" min="1" value="1" /></label>
+              <label>结束纬 <input id="dbTo" type="number" min="1" /></label>
+              <label>目标纬 <input id="dbTarget" type="number" min="1" value="1" /></label>
+            </div>
+            <div class="db-row">
+              <button id="dbCopy" class="btn tiny" title="把纬段复制到目标纬起始处（越界截断）">复制到目标</button>
+              <button id="dbCycle" class="btn tiny" title="以纬段为模板顺次重复到最后一纬">循环填充至末尾</button>
+              <button id="dbMirror" class="btn tiny" title="纬段内纬次倒序">纬段镜像</button>
+              <label>平移 <input id="dbShift" type="number" value="1" /> 纬</label>
+              <button id="dbShiftApply" class="btn tiny" title="纬段整体平移（可负）；移出界外丢弃，原位清空">平移纬段</button>
+              <button id="dbClearRange" class="btn tiny">清空纬段</button>
+            </div>
+          </div>
+
+          <div class="db-sub" style="margin-top:10px">④ 设备校验 <span id="dbIssueCount" class="badge">0</span></div>
+          <div id="dbIssueList" class="db-issue-list">
+            <p class="hint">越界 / 超限 / 切换过大的纬次在此列出，可定位到升综网格。</p>
+          </div>
+
+          <div class="db-sub" style="margin-top:10px">⑤ 还原为踏板方案</div>
+          <div class="db-reduce">
+            <div class="db-row">
+              <label>可用踏板 <input id="dbTreadles" type="number" min="1" max="24" /></label>
+              <button id="dbReduce" class="btn tiny btn-primary">生成踏板方案</button>
+            </div>
+            <div id="dbComboList" class="db-combo-list">
+              <p class="hint">相同升综组合共用踏板；组合数超过可用踏板时按频次取舍。</p>
+            </div>
+            <div id="dbDiffBox" class="db-diff hidden">
+              <div class="db-sub2">叠加比较：升综计划组织 vs 还原方案（红 = 差异）</div>
+              <canvas id="dbDiffCanvas"></canvas>
+              <p class="hint" id="dbDiffText"></p>
+            </div>
+            <button id="dbApply" class="btn tiny" disabled>应用为新草稿（不覆盖原稿）</button>
+          </div>
+        </div>
+
+        <!-- 右：升综网格 -->
+        <div class="db-col db-col-right">
+          <div class="db-sub">⑥ 升综网格（左键点选升起综框，右键清除；灰底列为设备外综框）</div>
+          <div class="db-grid-wrap" id="dbGridWrap">
+            <div id="dbGridSizer" class="db-grid-sizer"></div>
+            <canvas id="dbCanvas"></canvas>
+            <canvas id="dbOverlay"></canvas>
+          </div>
+          <p class="hint" id="dbGridInfo">—</p>
+          <div class="db-footer">
+            <button id="dbPrint" class="btn tiny">🖨 打印升综图</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= Toast ============================= -->
   <div id="toast" class="toast hidden"></div>
 
@@ -570,14 +651,25 @@
     <div id="loPrintSteps" class="print-legend lo-print-cols1"></div>
   </section>
 
+  <!-- ============================= 升综计划打印区 ============================= -->
+  <section id="dbPrintSheet" class="print-sheet">
+    <h1 id="dbPrintTitle"></h1>
+    <div id="dbPrintMeta" class="print-meta"></div>
+    <canvas id="dbPrintCanvas"></canvas>
+    <h2 class="print-h2">逐纬动作与警告</h2>
+    <div id="dbPrintLegend" class="print-legend db-print-cols"></div>
+  </section>
+
   <script src="/static/engine.js"></script>
   <script src="/static/defect-core.js"></script>
   <script src="/static/loom-core.js"></script>
+  <script src="/static/dobby-core.js"></script>
   <script src="/static/reverse.js"></script>
   <script src="/static/reverse-ui.js"></script>
   <script src="/static/shuttle-ui.js"></script>
   <script src="/static/defect-ui.js"></script>
   <script src="/static/loom-ui.js"></script>
+  <script src="/static/dobby-ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

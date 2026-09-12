@@ -643,7 +643,7 @@
     cvs.addEventListener('pointerdown', (ev) => {
       const cell = eventCell(ev);
       if (!cell) return;
-      cvs.setPointerCapture(ev.pointerId);
+      if (cvs.setPointerCapture) cvs.setPointerCapture(ev.pointerId);
       loom().pushHistory();
       const value = ev.button === 2 ? false : !db().cells[cell.p][cell.s];
       S.gesture = { pointerId: ev.pointerId, value, last: cell };

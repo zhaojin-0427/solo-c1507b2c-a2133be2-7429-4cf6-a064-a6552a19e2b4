@@ -174,6 +174,33 @@ class DefectApiTest(unittest.TestCase):
                            {"type": "float", "mmX": 1.25, "mmY": 2.5}, status=201)
         self.assertEqual((m["end"], m["pick"]), (2, 2))
 
+    def test_11_dobby_snapshot_repeat(self):
+        # 升综矩阵启用时，冻结的纬向循环取升综行周期而非踩踏周期
+        snap = make_snapshot()
+        cells = []
+        for p in range(16):
+            # 升综行周期 2（踩踏序列周期为 4）
+            row = [False] * 4
+            row[p % 2] = True
+            cells.append(row)
+        snap["dobby"] = {"enabled": True, "deviceShafts": 4, "maxLift": 4,
+                         "maxSwitch": 4, "cells": cells}
+        b = self.post_json("/api/batches", {
+            "name": "升综批次", "snapshot": snap,
+            "warpDensity": 10, "weftDensity": 10, "originX": 0, "originY": 0,
+        }, status=201)
+        self.assertEqual(b["repeatWeft"], 2)
+        self.assertEqual(b["repeatWarp"], 4)
+        # 未启用时仍取踩踏周期 4
+        snap2 = make_snapshot()
+        snap2["dobby"] = {"enabled": False, "deviceShafts": 4, "maxLift": 4,
+                          "maxSwitch": 4, "cells": cells}
+        b2 = self.post_json("/api/batches", {
+            "name": "升综停用批次", "snapshot": snap2,
+            "warpDensity": 10, "weftDensity": 10, "originX": 0, "originY": 0,
+        }, status=201)
+        self.assertEqual(b2["repeatWeft"], 4)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

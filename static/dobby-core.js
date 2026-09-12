@@ -107,7 +107,8 @@ const DobbyCore = (() => {
           });
         }
       }
-      if (lifts === 0) {
+      if (lifts === 0 && db && db.enabled) {
+        // 空升综行 = 全幅纬浮：仅在升综驱动时提示（未启用的空矩阵不报）
         issues.push({
           code: 'dobby-empty', level: 'warn', pick: p,
           msg: `第 ${p + 1} 纬无综框升起（全幅纬浮）`,

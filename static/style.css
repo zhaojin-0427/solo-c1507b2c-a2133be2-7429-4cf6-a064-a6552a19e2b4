@@ -536,6 +536,13 @@ tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
   body.lo-printing #dfPrintSheet { display: none; }
   body:not(.lo-printing) #loPrintSheet { display: none; }
   body.lo-printing #loPrintSheet { display: block; }
+  /* 升综计划打印时只显示升综打印页 */
+  body.db-printing #printSheet,
+  body.db-printing #dfPrintSheet,
+  body.db-printing #loPrintSheet { display: none; }
+  body:not(.db-printing) #dbPrintSheet { display: none; }
+  body.db-printing #dbPrintSheet { display: block; }
+  #dbPrintSheet .print-legend { columns: 1; }
 }
 
 /* =====================================================================
@@ -820,3 +827,96 @@ tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
 .lo-print-table td.lo-l { text-align: left; }
 .lo-print-steps { font-size: 10.5px; line-height: 1.8; margin-top: 4px; }
 .lo-print-steps .stale { color: #b3352a; text-decoration: line-through; }
+
+/* =====================================================================
+   多臂织机升综计划
+   ===================================================================== */
+.db-card {
+  width: min(1180px, 96vw);
+  max-height: 92vh;
+  padding: 16px 18px;
+}
+.db-layout { display: grid; grid-template-columns: 420px 1fr; gap: 16px; }
+.db-col { min-width: 0; }
+.db-col-left { max-height: 80vh; overflow-y: auto; padding-right: 4px; }
+.db-col-right { display: flex; flex-direction: column; min-height: 0; }
+.db-sub { font-size: 13px; font-weight: 600; margin: 4px 0 8px; }
+.db-sub2 { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin: 8px 0 4px; }
+.db-dims { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.db-dims label { font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; }
+.db-dims input[type="number"] { width: 56px; padding: 3px 6px; }
+
+.db-batch { display: flex; flex-direction: column; gap: 6px; }
+.db-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.db-row label { font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; }
+.db-row input[type="number"] { width: 56px; padding: 3px 6px; }
+.db-row #dbShift { width: 48px; }
+
+.db-issue-list {
+  max-height: 20vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; padding: 6px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.db-issue {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12px; line-height: 1.5; color: var(--bad);
+}
+.db-issue.warn { color: var(--warn); }
+.db-issue-msg { flex: 1; }
+.db-issue .btn { flex: 0 0 auto; padding: 1px 8px; font-size: 11px; }
+
+.db-reduce { display: flex; flex-direction: column; gap: 6px; }
+.db-reduce-head { font-size: 12px; color: var(--ink); margin-bottom: 2px; }
+.db-over { color: var(--bad); font-weight: 600; }
+.db-combo-list {
+  max-height: 24vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; padding: 6px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.db-combo-row {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; line-height: 1.5; cursor: pointer;
+  border-bottom: 1px dashed var(--grid); padding-bottom: 3px;
+}
+.db-combo-row.drop { opacity: .62; }
+.db-combo-t {
+  flex: 0 0 34px; font-size: 10.5px; font-weight: 700; text-align: center;
+  border-radius: 8px; padding: 0 3px;
+  background: var(--paper-2); color: var(--ink-soft); border: 1px solid var(--line);
+}
+.db-combo-row.keep .db-combo-t { background: #e8eef7; color: #29528c; border-color: #b9c4d6; }
+.db-combo-shafts { flex: 0 0 auto; font-weight: 600; }
+.db-combo-freq { flex: 0 0 auto; color: var(--ink); font-variant-numeric: tabular-nums; }
+.db-combo-picks {
+  flex: 1; font-size: 11px; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.db-diff { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 8px 10px; }
+.db-diff canvas {
+  border: 1px solid var(--line); border-radius: 3px;
+  image-rendering: pixelated; background: #fff; max-width: 100%;
+}
+#dbApply { align-self: flex-start; }
+
+/* 升综网格 */
+.db-grid-wrap {
+  position: relative; flex: 1; min-height: 0;
+  max-height: 72vh; overflow: auto;
+  width: max-content; max-width: 100%;
+  background: #fff;
+  border: 1px solid var(--grid-strong); border-radius: 4px;
+}
+.db-grid-wrap canvas { position: absolute; left: 0; top: 0; display: block; }
+#dbOverlay { pointer-events: none; }
+/* 绝对定位的 canvas 脱离文档流，用占位元素撑出实际网格尺寸 */
+.db-grid-sizer { width: 120px; height: 120px; }
+#dbGridInfo { margin-top: 6px; min-height: 16px; }
+.db-footer { display: flex; gap: 8px; margin-top: 8px; }
+
+/* 升综打印 */
+.db-print-cols { columns: 2; }
+.db-print-row { break-inside: avoid; font-size: 10.5px; line-height: 1.7; }
+.db-print-row.warn { color: #b3352a; }
+.db-print-warn { font-size: 9.5px; }
