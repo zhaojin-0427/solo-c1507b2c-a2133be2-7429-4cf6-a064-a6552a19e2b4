@@ -20,6 +20,14 @@
  *                                      join:null|'wrap'包绕|'lock'交锁|'cut'剪断重接 }
  *       locked: [picks]               已织纬锁定（批量操作与建议不得改动）
  *     }
+ *   dobby:     多臂织机升综计划（可缺省，旧草稿没有该字段）
+ *     {
+ *       enabled: bool,                升综矩阵驱动组织图（替代 联结×踩踏）
+ *       deviceShafts: int,            设备综框数（升起超出该编号的综框记越界）
+ *       maxLift: int,                 单纬最大升综数
+ *       maxSwitch: int,               相邻两纬允许改变状态的综框数
+ *       cells: [picks][shafts]        布尔，cells[p][s]=1 表示第 p 纬综框 s 升起
+ *     }
  * }
  *
  * drawdown[p][e]：1=经线在上（正面见经色），0=纬线在上（正面见纬色），
@@ -57,6 +65,7 @@ const Engine = (() => {
       weftColor: new Array(picks).fill(1),
       palette: PALETTE.map(c => ({ ...c })),
       shuttles: defaultShuttles(picks),
+      dobby: defaultDobby(picks, shafts),
     };
   }
 
@@ -70,6 +79,7 @@ const Engine = (() => {
       weftColor: new Array(picks).fill(1),
       palette: PALETTE.map(c => ({ ...c })),
       shuttles: defaultShuttles(picks),
+      dobby: defaultDobby(picks, shafts),
     };
   }
 
@@ -117,6 +127,36 @@ const Engine = (() => {
     return { count, colors, home, parkLimit, picks: pickArr, locked };
   }
 
+  /* ------------------------------------------------------------------ *
+   * 多臂升综计划：数据规整
+   * ------------------------------------------------------------------ */
+  /** 默认升综计划：未启用、全不升起、设备限制取草稿综框数（即不产生额外校验）。 */
+  function defaultDobby(picks, shafts) {
+    return normalizeDobby(null, picks, shafts);
+  }
+
+  /**
+   * 把（可能缺失/残缺的）升综计划规整为完整结构。
+   * 旧草稿没有 dobby 字段时传入 null，得到一份“未启用”的默认计划。
+   * 矩阵列数恒等于草稿综框数（经穿综映射到组织图）；deviceShafts 是设备能力，
+   * 升起编号 ≥ deviceShafts 的综框由校验记为越界。
+   */
+  function normalizeDobby(db, picks, shafts) {
+    const P = Math.max(0, picks | 0);
+    const S = Math.max(1, shafts | 0);
+    const deviceShafts = clampInt(db && db.deviceShafts, 1, 24, S);
+    const maxLift = clampInt(db && db.maxLift, 1, 24, S);
+    const maxSwitch = clampInt(db && db.maxSwitch, 1, 24, S);
+    const cells = [];
+    for (let p = 0; p < P; p++) {
+      const row = [];
+      for (let s = 0; s < S; s++)
+        row[s] = !!(db && db.cells && db.cells[p] && db.cells[p][s]);
+      cells.push(row);
+    }
+    return { enabled: !!(db && db.enabled), deviceShafts, maxLift, maxSwitch, cells };
+  }
+
   function cloneDraft(d) {
     return {
       ...d,
@@ -133,6 +173,10 @@ const Engine = (() => {
         picks: d.shuttles.picks.map(a => (a ? { ...a } : null)),
         locked: d.shuttles.locked.slice(),
       } : d.shuttles,
+      dobby: d.dobby ? {
+        ...d.dobby,
+        cells: d.dobby.cells.map(row => row.slice()),
+      } : d.dobby,
     };
   }
 
@@ -148,6 +192,12 @@ const Engine = (() => {
     if (nd.shuttles) {
       nd.shuttles.picks = resize1D(d.shuttles.picks, picks, () => null);
       nd.shuttles.locked = resize1D(d.shuttles.locked, picks, () => false);
+    }
+    if (nd.dobby) {
+      nd.dobby.cells = Array.from({ length: picks }, (_, p) =>
+        Array.from({ length: shafts }, (_, s) =>
+          (p < old.p && s < old.s && d.dobby.cells[p]) ? !!d.dobby.cells[p][s] : false)
+      );
     }
 
     nd.tieup = Array.from({ length: shafts }, (_, s) =>
@@ -169,23 +219,30 @@ const Engine = (() => {
    * ------------------------------------------------------------------ */
   function derive(d) {
     const { shafts, treadles, ends, picks } = d;
+    const db = (d.dobby && d.dobby.enabled && Array.isArray(d.dobby.cells)) ? d.dobby : null;
     const drawdown = [];      // [picks][ends] : 1 | 0 | null
     const lifted = [];        // [picks] -> Set<shaft>
     const pickValid = [];
 
     for (let p = 0; p < picks; p++) {
-      const t = d.treadling[p];
       const row = new Array(ends).fill(null);
       const set = new Set();
       let valid = true;
 
-      if (t < 0 || t >= treadles) {
-        valid = false; // 空踏板 / 越界踏板
+      if (db) {
+        // 升综矩阵驱动：每格确定，空行 = 全幅纬浮（有效组织，由浮线检查提示）
+        const cells = db.cells[p] || [];
+        for (let s = 0; s < shafts; s++) if (cells[s]) set.add(s);
       } else {
-        for (let s = 0; s < shafts; s++) {
-          if (d.tieup[s] && d.tieup[s][t]) set.add(s);
+        const t = d.treadling[p];
+        if (t < 0 || t >= treadles) {
+          valid = false; // 空踏板 / 越界踏板
+        } else {
+          for (let s = 0; s < shafts; s++) {
+            if (d.tieup[s] && d.tieup[s][t]) set.add(s);
+          }
+          if (set.size === 0) valid = false; // 该踏板无联结
         }
-        if (set.size === 0) valid = false; // 该踏板无联结
       }
       lifted[p] = set;
       pickValid[p] = valid;
@@ -233,13 +290,22 @@ const Engine = (() => {
     return n;
   }
 
+  /** 升综矩阵行序列（每行视为一个组合）的最小周期 */
+  function periodRows(cells) {
+    const n = cells.length;
+    const keys = cells.map(row => row.map(v => (v ? 1 : 0)).join(''));
+    return period1D(keys);
+  }
+
   /**
    * 组织循环：穿综/踩踏周期与组织图行列周期共同决定。
    * 返回 { warp, weft }，并附带是否含缺失格的标志。
    */
   function repeats(d, derived) {
     const threadingP = period1D(d.threading);
-    const treadlingP = period1D(d.treadling);
+    // 升综矩阵驱动时踩踏序列不再参与组织，纬向周期取升综行周期
+    const dobbyOn = !!(d.dobby && d.dobby.enabled && Array.isArray(d.dobby.cells));
+    const treadlingP = dobbyOn ? periodRows(d.dobby.cells) : period1D(d.treadling);
     const warpColorP = period1D(d.warpColor);
     const weftColorP = period1D(d.weftColor);
 
@@ -640,6 +706,48 @@ const Engine = (() => {
       }
     }
 
+    // 8) 多臂升综计划：设备约束（仅升综矩阵驱动组织图时启用）
+    if (d.dobby && d.dobby.enabled && Array.isArray(d.dobby.cells)) {
+      const db = d.dobby;
+      for (let p = 0; p < picks; p++) {
+        const row = db.cells[p] || [];
+        let lifts = 0;
+        const out = [];
+        for (let s = 0; s < shafts; s++) {
+          if (!row[s]) continue;
+          lifts++;
+          if (s >= db.deviceShafts) out.push(s);
+        }
+        if (out.length) {
+          issues.push({
+            level: 'error', code: 'dobby-shaft-range',
+            msg: `第 ${p + 1} 纬升起综框 ${out.map(s => s + 1).join('、')}，` +
+                 `超出设备 ${db.deviceShafts} 综框`,
+            loc: [{ grid: 'treadling', r: p, c: -1 }],
+          });
+        }
+        if (lifts > db.maxLift) {
+          issues.push({
+            level: 'error', code: 'dobby-lift-limit',
+            msg: `第 ${p + 1} 纬升起 ${lifts} 个综框，超过单纬上限 ${db.maxLift}`,
+            loc: [{ grid: 'treadling', r: p, c: -1 }],
+          });
+        }
+        if (p > 0) {
+          const prev = db.cells[p - 1] || [];
+          let sw = 0;
+          for (let s = 0; s < shafts; s++) if (!!row[s] !== !!prev[s]) sw++;
+          if (sw > db.maxSwitch) {
+            issues.push({
+              level: 'warn', code: 'dobby-switch-limit',
+              msg: `第 ${p}→${p + 1} 纬切换 ${sw} 个综框状态，超过相邻纬上限 ${db.maxSwitch}`,
+              loc: [{ grid: 'treadling', r: p, c: -1 }],
+            });
+          }
+        }
+      }
+    }
+
     const errors = issues.filter(i => i.level === 'error').length;
     const warns = issues.length - errors;
     return { issues, errors, warns };
@@ -718,6 +826,7 @@ const Engine = (() => {
     derive, colorGrid, repeats, floats, validate, stats, compare, analyze,
     period1D, gcd, lcm,
     defaultShuttles, normalizeShuttles, shuttlePath, shuttleSuggest,
+    defaultDobby, normalizeDobby,
   };
 })();
 
