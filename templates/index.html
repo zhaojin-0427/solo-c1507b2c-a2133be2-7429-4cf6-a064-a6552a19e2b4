@@ -540,6 +540,67 @@
     </div>
   </div>
 
+  <!-- ============================= 分区变筘编辑器 ============================= -->
+  <div id="reedModal" class="modal hidden">
+    <div class="modal-card rd-card">
+      <div class="modal-head">
+        <h2>分区变筘编辑器</h2>
+        <button class="btn close" data-close-rd>&times;</button>
+      </div>
+      <div class="rd-layout">
+        <!-- 左：区段 / 候选 / 问题 -->
+        <div class="rd-col rd-col-left">
+          <div class="rd-sub">① 区段（在右侧经线尺上拖出；边界按色经 / 穿综循环校正）</div>
+          <div class="rd-zone-bar">
+            <button id="rdLockEdges" class="btn tiny" title="锁定第一段与最后一段（布边）">锁定布边</button>
+            <button id="rdResetZones" class="btn tiny" title="清除分区，回到整幅一段">整幅一段</button>
+            <span class="hint" id="rdAlignHint"></span>
+          </div>
+          <div id="rdZoneList" class="rd-zone-list"></div>
+
+          <div class="rd-sub">② 候选方案（按 各段密度误差 → 总筘数 → 空筘数 → 改动量 排序）</div>
+          <div class="rd-row">
+            <button id="rdSearch" class="btn tiny btn-primary">搜索整幅穿筘序列</button>
+            <span class="hint" id="rdSearchHint"></span>
+          </div>
+          <div id="rdCandList" class="rd-cand-list">
+            <p class="hint">设置区段后点击“搜索整幅穿筘序列”。</p>
+          </div>
+
+          <div class="rd-sub">③ 问题定位 <span id="rdIssueCount" class="badge">0</span></div>
+          <div id="rdIssueList" class="rd-issue-list">
+            <p class="hint">漏穿 / 重穿 / 区段宽度偏差 / 空筘超限 / 镜像破坏在此列出。</p>
+          </div>
+
+          <div class="rd-actions">
+            <button id="rdAdopt" class="btn btn-primary" disabled>采纳并另存工艺单版本</button>
+          </div>
+        </div>
+
+        <!-- 右：经线尺 + 筘位预览 -->
+        <div class="rd-col rd-col-right">
+          <div class="rd-view-head">经线尺（拖动空白处建立区段；拖动 ◂▸ 调整边界；点选区段编辑）
+            <span id="rdCtxInfo" class="rd-ctx-info"></span></div>
+          <div class="rd-ruler-wrap"><canvas id="rdRuler"></canvas></div>
+          <div class="rd-view-head">筘位预览（按实际筘位拉伸组织图；空列 = 空筘开缝）
+            <span class="rd-zoom">
+              <button id="rdZoomOut" class="btn tiny">−</button>
+              <button id="rdZoomIn" class="btn tiny">+</button>
+            </span>
+          </div>
+          <div class="rd-preview-wrap" id="rdPreviewWrap"><canvas id="rdPreview"></canvas></div>
+          <div id="rdTrace" class="rd-trace">点击预览可追查经线 / 筘号 / 区段。</div>
+          <div class="rd-legend">
+            <span><i class="rd-sw rd-sw-zone"></i>区段（斜纹 = 锁定）</span>
+            <span><i class="rd-sw rd-sw-gap"></i>空筘开缝</span>
+            <span><i class="rd-sw rd-sw-issue"></i>问题筘</span>
+            <span><i class="rd-sw rd-sw-cmp"></i>对比候选</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= 多臂织机升综计划 ============================= -->
   <div id="dobbyModal" class="modal hidden">
     <div class="modal-card db-card">
@@ -761,6 +822,9 @@
     <div id="loPrintMeta" class="print-meta"></div>
     <h2 class="print-h2">分色用纱量</h2>
     <div id="loPrintUsage" class="print-legend lo-print-cols1"></div>
+    <h2 class="print-h2 hidden" id="loPrintZonesTitle">分区变筘（边界 / 空筘 / 锁定区段）</h2>
+    <canvas id="loPrintReed" class="hidden"></canvas>
+    <div id="loPrintZones" class="print-legend lo-print-cols1"></div>
     <h2 class="print-h2">穿筘方案与操作顺序</h2>
     <div id="loPrintSteps" class="print-legend lo-print-cols1"></div>
   </section>
@@ -786,6 +850,7 @@
   <script src="/static/engine.js"></script>
   <script src="/static/defect-core.js"></script>
   <script src="/static/loom-core.js"></script>
+  <script src="/static/reed-core.js"></script>
   <script src="/static/dobby-core.js"></script>
   <script src="/static/double-core.js"></script>
   <script src="/static/reverse.js"></script>
@@ -793,6 +858,7 @@
   <script src="/static/shuttle-ui.js"></script>
   <script src="/static/defect-ui.js"></script>
   <script src="/static/loom-ui.js"></script>
+  <script src="/static/reed-ui.js"></script>
   <script src="/static/dobby-ui.js"></script>
   <script src="/static/double-ui.js"></script>
   <script src="/static/app.js"></script>

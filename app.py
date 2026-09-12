@@ -28,6 +28,7 @@
   POST /api/sheets/<id>/steps/<sid>/done 确认步骤（必须按顺序，前序未确认则拒绝）
   POST /api/sheets/<id>/steps/<sid>/undo 撤回步骤（只能倒序撤回最后已确认项）
   POST /api/sheets/<id>/copy             复制新版（不改写原单；原单中与新单不符的步骤标记失效）
+  GET  /api/sheets/<id>/reedcheck        分区变筘复核（漏穿/重穿/宽度偏差/空筘超限/镜像破坏）
 
 所有静态资源均位于 static/ 目录，无外部 CDN 依赖，可离线运行。
 草稿与试织批次持久化到 SQLite（instance/drafts.db）。
@@ -650,6 +651,189 @@ def _json_text(obj, field):
         return None
 
 
+# --------------------------------------------------------------------------- #
+# 分区变筘：结构校验 + 复核（与前端 ReedCore.checkPlan 同口径）
+# --------------------------------------------------------------------------- #
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _valid_zoned_reedplan(rp):
+    """分区穿筘方案结构校验（冻结/复制时调用）；返回错误消息或 None。
+
+    旧工艺单 reedPlan 无 mode 字段，按整幅统一穿筘处理，直接放行。
+    """
+    if not isinstance(rp, dict):
+        return "reedPlan 缺失或格式错误"
+    mode = rp.get("mode", "uniform")
+    if mode not in ("uniform", "zoned"):
+        return "reedPlan.mode 无效（uniform/zoned）"
+    if mode != "zoned":
+        return None
+    zones = rp.get("zones")
+    dents = rp.get("dents")
+    if not isinstance(zones, list) or not zones or len(zones) > 200:
+        return "分区列表缺失或过多（1–200 段）"
+    if not isinstance(dents, list) or not dents or len(dents) > 20000:
+        return "穿筘序列缺失或过长（1–20000 筘）"
+    for i, v in enumerate(dents):
+        if not _is_int(v) or v < 0 or v > 4:
+            return f"第 {i + 1} 筘根数无效（0–4 的整数）"
+    for i, z in enumerate(zones):
+        if not isinstance(z, dict):
+            return f"第 {i + 1} 个区段格式错误"
+        frm, to = z.get("from"), z.get("to")
+        if not _is_int(frm) or not _is_int(to) or frm < 1 or to < frm or to > 1000000:
+            return f"第 {i + 1} 个区段经线范围无效"
+        td = z.get("targetDensity")
+        if isinstance(td, bool) or not isinstance(td, (int, float)) \
+                or not math.isfinite(td) or not (0.1 <= td <= 200):
+            return f"第 {i + 1} 个区段目标上机经密无效（0.1–200 根/cm）"
+        mpd = z.get("maxPerDent", 4)
+        if not _is_int(mpd) or not (1 <= mpd <= 4):
+            return f"第 {i + 1} 个区段每筘上限无效（1–4 根）"
+        mer = z.get("maxEmptyRun", 0)
+        if not _is_int(mer) or not (0 <= mer <= 64):
+            return f"第 {i + 1} 个区段连续空筘上限无效（0–64）"
+        if "fixedSeq" in z:
+            fs = z["fixedSeq"]
+            if not isinstance(fs, list) or len(fs) > 20000 or \
+                    any(not _is_int(v) or v < 0 or v > 4 for v in fs):
+                return f"第 {i + 1} 个区段固定筘序列无效"
+    return None
+
+
+def _sanitize_zone(z):
+    """宽松规整区段（复核用）：非法值取默认，无法规整返回 None。"""
+    if not isinstance(z, dict):
+        return None
+    frm, to = z.get("from"), z.get("to")
+    if not _is_int(frm) or not _is_int(to) or frm < 1 or to < frm:
+        return None
+    mpd = z.get("maxPerDent", 4)
+    mer = z.get("maxEmptyRun", 0)
+    return {
+        "from": frm, "to": to,
+        "targetDensity": finite_float(z.get("targetDensity"), 0.1, 200, 10),
+        "maxPerDent": mpd if _is_int(mpd) and 1 <= mpd <= 4 else 4,
+        "maxEmptyRun": mer if _is_int(mer) and 0 <= mer <= 64 else 0,
+        "mirror": bool(z.get("mirror")),
+        "locked": bool(z.get("locked")),
+    }
+
+
+def check_zoned_plan(zones, dents, total_ends, reed_dents):
+    """分区变筘复核：漏穿 / 重穿 / 跨区段筘 / 每筘超限 / 区段宽度偏差 /
+    连续空筘超限 / 镜像破坏。与前端 ReedCore.checkPlan 同口径。"""
+    issues = []
+
+    def add(code, msg, zone=None, dent=None, end_from=None, end_to=None, level="error"):
+        issues.append({
+            "code": code, "level": level, "msg": msg,
+            "zone": zone, "dent": dent, "endFrom": end_from, "endTo": end_to,
+        })
+
+    rd = finite_float(reed_dents, 0.01, 100, 5)
+    try:
+        E = max(0, int(total_ends or 0))
+    except (TypeError, ValueError):
+        E = 0
+
+    # ① 区段覆盖：缺口 = 漏穿，重叠 = 重穿
+    zs = [z for z in (_sanitize_zone(z) for z in (zones or [])) if z]
+    zs.sort(key=lambda z: z["from"])
+    expect = 1
+    for i, z in enumerate(zs):
+        if z["from"] > expect:
+            add("miss", f"第 {expect}–{z['from'] - 1} 根不属于任何区段（漏穿）",
+                end_from=expect, end_to=z["from"] - 1)
+        elif z["from"] < expect:
+            add("over", f"第 {z['from']}–{expect - 1} 根被多个区段覆盖（重穿）",
+                zone=i, end_from=z["from"], end_to=expect - 1)
+        expect = max(expect, z["to"] + 1)
+    if E > 0 and expect <= E:
+        add("miss", f"第 {expect}–{E} 根不属于任何区段（漏穿）",
+            end_from=expect, end_to=E)
+
+    # ② 筘序列值域（0–4）
+    clean = []
+    for i, v in enumerate(dents or []):
+        ok = _is_int(v) and 0 <= v <= 4
+        if not ok:
+            add("cap", f"第 {i + 1} 筘根数 {v} 超出每筘 0–4 根范围", dent=i + 1)
+        clean.append(v if ok else 0)
+
+    # ③ 逐区段走筘
+    di = 0
+    for zi, z in enumerate(zs):
+        length = z["to"] - z["from"] + 1
+        d0 = di
+        covered = 0
+        while covered < length and di < len(clean):
+            take = clean[di]
+            if take > z["maxPerDent"]:
+                add("cap",
+                    f"第 {di + 1} 筘 {take} 根超过区段 {zi + 1} 每筘上限 {z['maxPerDent']} 根",
+                    zone=zi, dent=di + 1)
+            if take > 0 and covered + take > length:
+                add("span",
+                    f"第 {di + 1} 筘跨越区段 {zi + 1} 边界（第 {z['to']} 根）",
+                    zone=zi, dent=di + 1, end_from=z["from"], end_to=z["to"])
+            covered += take
+            di += 1
+        sub = clean[d0:di]
+        if covered < length:
+            add("miss",
+                f"区段 {zi + 1} 少穿 {length - covered} 根"
+                f"（第 {z['from'] + covered}–{z['to']} 根漏穿）",
+                zone=zi, end_from=z["from"] + covered, end_to=z["to"])
+        # 连续空筘
+        k = 0
+        while k < len(sub):
+            if sub[k] != 0:
+                k += 1
+                continue
+            j = k
+            while j < len(sub) and sub[j] == 0:
+                j += 1
+            run = j - k
+            if run > z["maxEmptyRun"]:
+                add("empty-run",
+                    f"区段 {zi + 1} 第 {d0 + k + 1}–{d0 + j} 筘连续 {run} 个空筘"
+                    f"（上限 {z['maxEmptyRun']}）",
+                    zone=zi, dent=d0 + k + 1)
+            k = j
+        # 中心镜像
+        if z["mirror"]:
+            n = len(sub)
+            for i in range(n // 2):
+                if sub[i] != sub[n - 1 - i]:
+                    add("mirror",
+                        f"区段 {zi + 1} 镜像破坏：第 {d0 + i + 1} 筘（{sub[i]} 根）与"
+                        f"第 {d0 + n - i} 筘（{sub[n - 1 - i]} 根）不对称",
+                        zone=zi, dent=d0 + i + 1)
+                    break
+        # 区段宽度偏差
+        if z["targetDensity"] > 0:
+            ideal = length / z["targetDensity"]
+            actual = len(sub) / rd
+            dev = actual - ideal
+            if abs(dev) > 0.2:
+                add("width",
+                    f"区段 {zi + 1} 实际上机宽 {actual:.2f} cm，"
+                    f"与目标 {ideal:.2f} cm 偏差 {'+' if dev >= 0 else ''}{dev:.2f} cm",
+                    zone=zi, level="warn")
+
+    # ④ 筘序列总长：走完区段仍有剩余 = 重穿（超出整幅）
+    if di < len(clean):
+        extra = sum(clean[di:])
+        add("over",
+            f"第 {di + 1} 筘起共 {len(clean) - di} 筘（{extra} 根）"
+            f"超出整幅 {E} 根（重穿）",
+            dent=di + 1)
+    return issues
+
+
 def step_signature(kind, label, detail):
     """步骤签名：种类 + 区段内容。复制新版时用于判定原单步骤是否失效。"""
     canon = json.dumps(detail, ensure_ascii=False, sort_keys=True)
@@ -742,6 +926,9 @@ def _sheet_payload(payload):
         if text is None or payload.get(key) is None:
             return None, f"{key} 缺失或无法序列化"
         fields[key] = text
+    rp_err = _valid_zoned_reedplan(payload.get("reedPlan"))
+    if rp_err:
+        return None, rp_err
     fp = str(payload.get("fingerprint") or "")
     fields["fingerprint"] = fp[:4000]
     steps, err = _valid_steps(payload.get("steps"))
@@ -835,6 +1022,37 @@ def delete_sheet(sheet_id):
     if cur.rowcount == 0:
         return jsonify(error="工艺单不存在"), 404
     return jsonify(ok=True)
+
+
+@app.get("/api/sheets/<int:sheet_id>/reedcheck")
+def sheet_reedcheck(sheet_id):
+    """分区变筘复核：对已冻结工艺单的穿筘方案做服务端校验。
+
+    统一穿筘（旧工艺单）返回 mode=uniform、无问题；
+    分区变筘返回 漏穿/重穿/跨段/每筘超限/宽度偏差/空筘超限/镜像破坏 列表。
+    """
+    row = get_sheet_or_none(sheet_id)
+    if row is None:
+        return jsonify(error="工艺单不存在"), 404
+    try:
+        reed_plan = json.loads(row["reed_plan"])
+        derived = json.loads(row["derived"])
+        params = json.loads(row["params"])
+    except json.JSONDecodeError:
+        return jsonify(error="工艺单数据损坏"), 500
+    if not isinstance(reed_plan, dict) or reed_plan.get("mode") != "zoned":
+        return jsonify(mode="uniform", issues=[], errorCount=0, warnCount=0)
+    total_ends = derived.get("totalEnds") if isinstance(derived, dict) else 0
+    reed_dents = params.get("reedDents") if isinstance(params, dict) else 5
+    issues = check_zoned_plan(
+        reed_plan.get("zones") or [], reed_plan.get("dents") or [],
+        total_ends or 0, reed_dents or 5)
+    return jsonify(
+        mode="zoned",
+        issues=issues,
+        errorCount=sum(1 for i in issues if i["level"] == "error"),
+        warnCount=sum(1 for i in issues if i["level"] != "error"),
+    )
 
 
 def _ordered_steps(db, sheet_id):

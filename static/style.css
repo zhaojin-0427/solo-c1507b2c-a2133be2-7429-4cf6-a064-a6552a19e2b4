@@ -827,6 +827,125 @@ tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
 .lo-print-table td.lo-l { text-align: left; }
 .lo-print-steps { font-size: 10.5px; line-height: 1.8; margin-top: 4px; }
 .lo-print-steps .stale { color: #b3352a; text-decoration: line-through; }
+/* 分区变筘（工艺单内嵌） */
+.lo-reed-edit { margin-left: 8px; padding: 1px 8px; font-size: 11px; }
+.lo-zone-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
+.lo-zone-table th, .lo-zone-table td { border: 1px solid var(--line); padding: 2px 5px; text-align: center; }
+.lo-zone-table th { background: var(--panel); color: var(--ink-soft); font-weight: 600; }
+.lo-reedcheck { margin-top: 6px; }
+.lo-issue-list { margin: 4px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.7; }
+.lo-issue-list li.err { color: var(--bad); }
+.lo-issue-list li.warn { color: var(--warn); }
+.lo-dent-empty { color: #b3352a; }
+#loPrintReed { display: block; margin: 4px 0; border: 1px solid #ccc; }
+#loPrintReed.hidden, #loPrintZonesTitle.hidden { display: none; }
+
+/* =====================================================================
+   分区变筘编辑器
+   ===================================================================== */
+.rd-card {
+  width: min(1360px, 97vw);
+  max-height: 94vh;
+  padding: 14px 16px;
+}
+.rd-layout { display: grid; grid-template-columns: 400px 1fr; gap: 14px; height: 82vh; }
+.rd-col { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.rd-col-left { overflow-y: auto; padding-right: 4px; }
+.rd-col-right { overflow: hidden; }
+.rd-sub { font-size: 13px; font-weight: 600; margin: 10px 0 6px; }
+.rd-sub:first-child { margin-top: 2px; }
+.rd-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.rd-zone-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+
+.rd-zone-list { display: flex; flex-direction: column; gap: 6px; }
+.rd-zone {
+  border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  padding: 6px 8px; cursor: pointer;
+}
+.rd-zone.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(156,74,47,.2); }
+.rd-zone.locked { background: #f7f4ec; }
+.rd-zone-head { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.rd-zone-chip {
+  flex: 0 0 12px; width: 12px; height: 12px; border-radius: 3px;
+  border: 1px solid rgba(0,0,0,.25);
+}
+.rd-zone-range { font-size: 11px; color: var(--ink-soft); flex: 1; }
+.rd-zone-head .btn { padding: 0 6px; font-size: 11px; }
+.rd-zone-form {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px;
+  margin-top: 5px; font-size: 11px; color: var(--ink-soft);
+}
+.rd-zone-form label { display: flex; align-items: center; gap: 4px; }
+.rd-zone-form input[type="number"] { width: 52px; padding: 2px 4px; font-size: 11px; }
+
+.rd-cand-list { display: flex; flex-direction: column; gap: 5px; }
+.rd-cand {
+  border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  padding: 5px 8px; font-size: 11.5px;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; align-items: center;
+}
+.rd-cand.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(156,74,47,.2); }
+.rd-cand-main { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.rd-cand-meta { color: var(--ink-soft); font-size: 11px; }
+.rd-cand-cmp { font-size: 11px; color: var(--ink-soft); display: flex; align-items: center; gap: 3px; }
+.rd-cand-zones { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.rd-cand-zone {
+  font-size: 10px; border: 1px solid; border-radius: 8px; padding: 0 6px;
+  color: var(--ink); background: #fff;
+}
+
+.rd-issue-list { display: flex; flex-direction: column; gap: 4px; max-height: 22vh; overflow-y: auto; }
+.rd-issue {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  padding: 3px 7px; font-size: 11px;
+}
+.rd-issue.err { border-color: #e2b6b0; background: #fbefec; }
+.rd-issue.warn { border-color: #e3cd97; background: #faf3e2; }
+.rd-issue-code {
+  flex: 0 0 auto; font-size: 10px; padding: 0 5px; border-radius: 7px; font-weight: 600;
+  background: var(--paper-2); color: var(--ink-soft); border: 1px solid var(--line);
+}
+.rd-issue.err .rd-issue-code { background: #f3d9d4; color: var(--bad); border-color: #e2b6b0; }
+.rd-issue.warn .rd-issue-code { background: #f5e8c8; color: #7c5a17; border-color: #e3cd97; }
+.rd-issue-msg { flex: 1; line-height: 1.5; }
+.rd-issue .btn { padding: 0 6px; font-size: 10.5px; }
+.ok-hint { color: var(--ok); }
+
+.rd-actions { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--grid-strong); }
+.rd-actions .btn { width: 100%; padding: 7px; }
+
+.rd-view-head {
+  font-size: 12px; font-weight: 600; color: var(--ink);
+  margin: 4px 0 4px; display: flex; align-items: center; gap: 8px;
+}
+.rd-ctx-info { font-weight: 400; font-size: 11px; color: var(--ink-soft); }
+.rd-zoom { margin-left: auto; display: flex; gap: 4px; }
+.rd-ruler-wrap {
+  border: 1px solid var(--line); border-radius: 7px; background: #fffdf7;
+  overflow: hidden; margin-bottom: 8px;
+}
+#rdRuler { display: block; cursor: crosshair; }
+.rd-preview-wrap {
+  flex: 1; min-height: 160px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 7px; background: #fffdf7;
+}
+#rdPreview { display: block; cursor: pointer; }
+.rd-trace {
+  font-size: 11.5px; color: var(--ink); background: var(--paper-2);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 8px; margin-top: 6px; min-height: 26px;
+}
+.rd-legend { display: flex; gap: 14px; font-size: 11px; color: var(--ink-soft); margin-top: 6px; flex-wrap: wrap; }
+.rd-sw {
+  display: inline-block; width: 11px; height: 11px; border-radius: 2px;
+  margin-right: 4px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25);
+}
+.rd-sw-zone { background: #29528c55; }
+.rd-sw-gap { background: #f3e9e6; border-color: #d8b9b0; }
+.rd-sw-issue { background: #b3352a; }
+.rd-sw-cmp { background: rgba(179,53,42,.6); }
+
 
 /* =====================================================================
    多臂织机升综计划

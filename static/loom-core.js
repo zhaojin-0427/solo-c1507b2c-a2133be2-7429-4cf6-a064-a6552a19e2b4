@@ -250,18 +250,57 @@ const LoomCore = (() => {
   }
 
   /**
+   * 显式逐筘数组展开（分区变筘）：dents[i] = 第 i+1 筘根数（0 = 空筘）。
+   * 空筘也占一行；endOffset / dentOffset 用于换算整幅 1 基编号。
+   */
+  function dentWalkFull(dents, endOffset = 0, dentOffset = 0) {
+    const rows = [];
+    let cur = 0;
+    const arr = Array.isArray(dents) ? dents : [];
+    for (let i = 0; i < arr.length; i++) {
+      const take = Math.max(0, Math.min(4, arr[i] | 0));
+      rows.push({
+        dent: dentOffset + i + 1,
+        from: endOffset + cur + 1,
+        to: endOffset + cur + take,
+        take, full: take > 0, empty: take === 0,
+      });
+      cur += take;
+    }
+    return rows;
+  }
+
+  /** 统一穿筘循环序列展开为整幅逐筘数组（末筘可不足；分区模式作基线用） */
+  function uniformDents(totalEnds, seq) {
+    const out = [];
+    const L = Math.max(1, (seq && seq.length) ? seq.length : 1);
+    const E = Math.max(0, totalEnds | 0);
+    let cur = 0, d = 0;
+    while (cur < E) {
+      const want = Math.max(1, Math.min(4, Math.round(seq && seq.length ? seq[d % L] : 1)));
+      const take = Math.min(want, E - cur);
+      out.push(take);
+      cur += take;
+      d++;
+    }
+    return out;
+  }
+
+  /**
    * 生成操作步骤（连续区段压缩）：
    *   ① 整经色序：经纱色带循环平铺到整经根数后按同色连续段压缩；
    *      段数过多（交替 / 细小花型）时退化为一段“色序循环”指令，
    *      避免每根经线各成一步；
    *   ② 穿综：穿综最小循环平铺，整幅为一段循环指令；
-   *   ③ 穿筘：所选穿筘序列循环，整幅一段（末筘不足单独注明）。
+   *   ③ 穿筘：统一穿筘整幅一段（末筘不足单独注明）；
+   *      分区变筘（opts.zoned = {zones, dents}）时每个区段一步，
+   *      步骤可逐筘展开（含空筘行）。
    * 步骤：{ index, kind:'warp'|'thread'|'dent', label, detail:{from,to,…} }
    */
   /** 整经 RLE 段数上限：超过则改用色序循环段（交替色经每根一段会爆步骤数） */
   const WARP_RLE_MAX = 64;
 
-  function buildSteps(snapshot, plan, reedSeq) {
+  function buildSteps(snapshot, plan, reedSeq, opts) {
     const E = plan.totalEnds;
     const palette = snapshot.palette || [];
     const wc = snapshot.warpColor || [];
@@ -321,17 +360,43 @@ const LoomCore = (() => {
     });
 
     // ③ 穿筘段
-    const seq = (reedSeq && reedSeq.length ? reedSeq : [1]).map(v =>
-      Math.max(1, Math.min(4, Math.round(v))));
-    const rows = dentWalk(E, seq);
-    const last = rows[rows.length - 1];
-    const lastPartial = last && !last.full ? last.take : null;
-    steps.push({
-      kind: 'dent',
-      label: `穿筘：第 1–${E} 根 · 每筘 [${seq.join(' ')}] 循环，共 ${rows.length} 筘` +
-        (lastPartial ? `（末筘 ${lastPartial} 根）` : ''),
-      detail: { from: 1, to: E, seq, dents: rows.length, lastPartial },
-    });
+    if (opts && opts.zoned && Array.isArray(opts.zoned.dents) && opts.zoned.dents.length) {
+      // 分区变筘：每个区段一步，可逐筘展开（含空筘）
+      const zones = opts.zoned.zones || [];
+      const dents = opts.zoned.dents.map(v => Math.max(0, Math.min(4, v | 0)));
+      let di = 0;
+      zones.forEach((z, zi) => {
+        const len = z.to - z.from + 1;
+        const d0 = di;
+        const sub = [];
+        let covered = 0;
+        while (covered < len && di < dents.length) { sub.push(dents[di]); covered += dents[di]; di++; }
+        const empty = sub.reduce((s, v) => s + (v === 0 ? 1 : 0), 0);
+        const seqShow = sub.length > 12 ? sub.slice(0, 12).join(' ') + ' …' : sub.join(' ');
+        steps.push({
+          kind: 'dent',
+          label: `穿筘（区段${zi + 1}）：第 ${z.from}–${z.to} 根 · 每筘 [${seqShow}]，共 ${sub.length} 筘` +
+            (empty ? `（空筘 ${empty}）` : '') + (z.locked ? '（锁定）' : ''),
+          detail: {
+            from: z.from, to: z.to, zone: zi, seq: sub, dents: sub.length,
+            empty, locked: !!z.locked, mirror: !!z.mirror,
+            dent0: d0 + 1, full: true,
+          },
+        });
+      });
+    } else {
+      const seq = (reedSeq && reedSeq.length ? reedSeq : [1]).map(v =>
+        Math.max(1, Math.min(4, Math.round(v))));
+      const rows = dentWalk(E, seq);
+      const last = rows[rows.length - 1];
+      const lastPartial = last && !last.full ? last.take : null;
+      steps.push({
+        kind: 'dent',
+        label: `穿筘：第 1–${E} 根 · 每筘 [${seq.join(' ')}] 循环，共 ${rows.length} 筘` +
+          (lastPartial ? `（末筘 ${lastPartial} 根）` : ''),
+        detail: { from: 1, to: E, seq, dents: rows.length, lastPartial },
+      });
+    }
 
     steps.forEach((s, i) => { s.index = i; });
     return steps;
@@ -364,7 +429,7 @@ const LoomCore = (() => {
     normalizeParams, normalizeYarnGpm, loomWarpDensity,
     derivePlan,
     dentSequence, discrepancy, minPeriodLen, searchReedPlans, reedNote,
-    dentWalk, buildSteps, WARP_RLE_MAX,
+    dentWalk, dentWalkFull, uniformDents, buildSteps, WARP_RLE_MAX,
     fingerprint,
   };
 })();

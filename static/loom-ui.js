@@ -167,6 +167,7 @@
     const reedSearch = LC().searchReedPlans(target);
     S.preview = {
       snapshot, params, plan, reedSearch, reedSel: 0,
+      zoned: null,          // 分区变筘方案（由分区编辑器采纳写入）
       fingerprint: LC().fingerprint(snapshot, params),
     };
     renderMiddle();
@@ -177,6 +178,7 @@
   function previewSteps() {
     const pv = S.preview;
     if (!pv) return [];
+    if (pv.zoned) return LC().buildSteps(pv.snapshot, pv.plan, null, { zoned: pv.zoned });
     const seq = pv.reedSearch.plans[pv.reedSel].seq;
     return LC().buildSteps(pv.snapshot, pv.plan, seq);
   }
@@ -192,7 +194,8 @@
     if (pv) {
       renderDerived(pv.plan, pv.params, true);
       renderUsage(pv.plan);
-      renderReedCandidates();
+      if (pv.zoned) renderReedZonedPreview();
+      else renderReedCandidates();
       $('#loFreeze').textContent = cur
         ? `冻结为新版 v${cur.version + 1}（原单 v${cur.version} 保留）`
         : '冻结并建立工艺单';
@@ -256,7 +259,8 @@
     const el = $('#loReedBox');
     const rs = pv.reedSearch;
     const note = LC().reedNote(rs, pv.params.reedDents);
-    let html = `<div class="lo-sub2">穿筘方案（目标平均每筘 ${fmt2(rs.target)} 根 = 上机经密 ${fmt2(pv.plan.loomDensity)} ÷ 筘 ${pv.params.reedDents} 筘/cm）</div>`;
+    let html = `<div class="lo-sub2">穿筘方案（目标平均每筘 ${fmt2(rs.target)} 根 = 上机经密 ${fmt2(pv.plan.loomDensity)} ÷ 筘 ${pv.params.reedDents} 筘/cm）
+      <button id="loOpenReed" class="btn tiny lo-reed-edit" title="在经线尺上拖出区段，分段设置经密 / 每筘根数 / 空筘 / 镜像">⇥ 分区变筘…</button></div>`;
     rs.plans.forEach((cand, i) => {
       const selCls = i === pv.reedSel ? ' sel' : '';
       const errTxt = cand.err < 1e-9 ? '精确匹配' : `误差 ${fmt2(cand.err)} 根/筘`;
@@ -276,19 +280,107 @@
         renderReedCandidates();
       });
     });
+    bindOpenReed();
+  }
+
+  function bindOpenReed() {
+    const btn = $('#loOpenReed');
+    if (btn) btn.addEventListener('click', () => {
+      if (window.__reedAPI) window.__reedAPI.open();
+    });
+  }
+
+  /** 分区变筘预览摘要（采纳后、冻结前） */
+  function renderReedZonedPreview() {
+    const pv = S.preview;
+    const z = pv.zoned;
+    const el = $('#loReedBox');
+    const m = z.metrics || [];
+    const errSum = m.reduce((s, x) => s + Math.abs(x.err), 0);
+    let html = `<div class="lo-sub2">穿筘方案：分区变筘（${z.zones.length} 段）
+      <button id="loOpenReed" class="btn tiny lo-reed-edit" title="回到分区变筘编辑器调整">⇥ 分区变筘…</button></div>
+      <div class="lo-reed-cand sel">
+        <span class="lo-reed-seq">${z.zones.length} 段 · 共 ${z.dents.length} 筘</span>
+        <span class="lo-reed-meta">空筘 ${z.emptyDents} · 密度误差合计 ${fmt2(errSum)} 根/cm · 改动 ${z.changes} 根</span>
+        <span class="lo-tag lo-reed-best">待冻结</span>
+      </div>`;
+    html += '<table class="lo-zone-table"><thead><tr>' +
+      '<th>段</th><th>经线</th><th>目标经密</th><th>实际</th><th>筘数</th><th>空筘</th><th>镜像</th><th>锁</th>' +
+      '</tr></thead><tbody>';
+    z.zones.forEach((zo, i) => {
+      const mm = m[i] || {};
+      html += `<tr>
+        <td>${i + 1}</td><td>${zo.from}–${zo.to}</td>
+        <td>${fmt2(zo.targetDensity)}</td><td>${fmt2(mm.density || 0)}</td>
+        <td>${mm.dents != null ? mm.dents : '—'}</td><td>${mm.empty || 0}</td>
+        <td>${zo.mirror ? '✓' : ''}</td><td>${zo.locked ? '🔒' : ''}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    if (z.note) html += `<div class="lo-note">⚠ ${escapeHtml(z.note)}</div>`;
+    el.innerHTML = html;
+    bindOpenReed();
   }
 
   function renderReedFrozen(sheet) {
     const el = $('#loReedBox');
     const rp = sheet.reedPlan || {};
+    if (rp.mode === 'zoned') { renderReedZonedFrozen(sheet, el, rp); return; }
     const seqTxt = (rp.seq || []).join(' ');
-    let html = `<div class="lo-sub2">穿筘方案（已冻结）</div>
+    let html = `<div class="lo-sub2">穿筘方案（已冻结 · 整幅统一穿筘）
+      <button id="loOpenReed" class="btn tiny lo-reed-edit" title="以此单为基线打开分区变筘编辑器">⇥ 分区变筘…</button></div>
       <div class="lo-reed-cand sel">
         <span class="lo-reed-seq">[${seqTxt}]</span>
         <span class="lo-reed-meta">平均 ${fmt2(rp.avg || 0)} 根/筘 · 共 ${rp.dents != null ? rp.dents : '—'} 筘${rp.err ? ` · 误差 ${fmt2(rp.err)} 根/筘` : ' · 精确匹配'}</span>
       </div>`;
     if (rp.note) html += `<div class="lo-note">⚠ ${escapeHtml(rp.note)}</div>`;
     el.innerHTML = html;
+    bindOpenReed();
+  }
+
+  /** 已冻结的分区变筘方案：区段表 + 服务端复核结果 */
+  function renderReedZonedFrozen(sheet, el, rp) {
+    const zones = rp.zones || [];
+    const m = rp.metrics || [];
+    let html = `<div class="lo-sub2">穿筘方案（已冻结 · 分区变筘 ${zones.length} 段）
+      <button id="loOpenReed" class="btn tiny lo-reed-edit" title="在分区变筘编辑器中查看 / 以此为基础出新版">⇥ 分区变筘…</button></div>
+      <div class="lo-reed-cand sel">
+        <span class="lo-reed-seq">${zones.length} 段 · 共 ${(rp.dents || []).length} 筘</span>
+        <span class="lo-reed-meta">空筘 ${rp.emptyDents != null ? rp.emptyDents : '—'} · 改动 ${rp.changes != null ? rp.changes : '—'} 根</span>
+      </div>`;
+    html += '<table class="lo-zone-table"><thead><tr>' +
+      '<th>段</th><th>经线</th><th>目标经密</th><th>实际</th><th>筘数</th><th>空筘</th><th>镜像</th><th>锁</th>' +
+      '</tr></thead><tbody>';
+    zones.forEach((zo, i) => {
+      const mm = m[i] || {};
+      html += `<tr>
+        <td>${i + 1}</td><td>${zo.from}–${zo.to}</td>
+        <td>${fmt2(zo.targetDensity)}</td><td>${mm.density != null ? fmt2(mm.density) : '—'}</td>
+        <td>${mm.dents != null ? mm.dents : '—'}</td><td>${mm.empty != null ? mm.empty : 0}</td>
+        <td>${zo.mirror ? '✓' : ''}</td><td>${zo.locked ? '🔒' : ''}</td></tr>`;
+    });
+    html += '</tbody></table><div id="loReedCheck" class="lo-reedcheck"><span class="hint">复核中…</span></div>';
+    if (rp.note) html += `<div class="lo-note">⚠ ${escapeHtml(rp.note)}</div>`;
+    el.innerHTML = html;
+    bindOpenReed();
+    // 服务端复核（与前端 ReedCore.checkPlan 同口径）
+    req('GET', `/api/sheets/${sheet.id}/reedcheck`).then(r => {
+      const box = $('#loReedCheck');
+      if (!box || !S.current || S.current.id !== sheet.id) return;
+      if (!r.issues || !r.issues.length) {
+        box.innerHTML = '<div class="lo-note ok">✓ 服务端复核：分区穿筘无漏穿 / 重穿 / 空筘超限 / 镜像破坏。</div>';
+        return;
+      }
+      let h = `<div class="lo-note">⚠ 服务端复核发现 ${r.errorCount} 个错误、${r.warnCount} 个提醒：</div>`;
+      h += '<ul class="lo-issue-list">';
+      r.issues.slice(0, 12).forEach(it => {
+        h += `<li class="${it.level === 'error' ? 'err' : 'warn'}">${escapeHtml(it.msg)}</li>`;
+      });
+      if (r.issues.length > 12) h += `<li>…共 ${r.issues.length} 条</li>`;
+      box.innerHTML = h + '</ul>';
+    }).catch(() => {
+      const box = $('#loReedCheck');
+      if (box) box.innerHTML = '<span class="hint">复核请求失败。</span>';
+    });
   }
 
   /* ============================== 冻结（新建 / 新版） ================== */
@@ -296,10 +388,27 @@
     const pv = S.preview;
     if (!pv) { toast('请先“计算预览”'); return; }
     const steps = previewSteps();
-    const cand = pv.reedSearch.plans[pv.reedSel];
-    const dentStep = steps.find(s => s.kind === 'dent');
+    const zoned = pv.zoned || null;
+    const cand = !zoned && pv.reedSearch ? pv.reedSearch.plans[pv.reedSel] : null;
+    const dentSteps = steps.filter(s => s.kind === 'dent');
     const name = ($('#loSheetName').value || '').trim() ||
       ($('#draftName').value || '未命名草稿') + ' 工艺单';
+    const reedPlan = zoned ? {
+      mode: 'zoned',
+      zones: zoned.zones,
+      dents: zoned.dents,
+      metrics: zoned.metrics,
+      emptyDents: zoned.emptyDents,
+      changes: zoned.changes,
+      reedDents: pv.params.reedDents,
+      note: zoned.note || null,
+    } : {
+      mode: 'uniform',
+      seq: cand.seq, dents: dentSteps.length ? dentSteps[0].detail.dents : null,
+      avg: cand.avg, err: cand.err, disc: cand.disc,
+      target: pv.reedSearch.target, exact: pv.reedSearch.exact,
+      note: LC().reedNote(pv.reedSearch, pv.params.reedDents),
+    };
     const body = {
       name,
       draftId: window.__loom.state.savedId,
@@ -307,12 +416,7 @@
       snapshot: pv.snapshot,
       params: pv.params,
       derived: pv.plan,
-      reedPlan: {
-        seq: cand.seq, dents: dentStep ? dentStep.detail.dents : null,
-        avg: cand.avg, err: cand.err, disc: cand.disc,
-        target: pv.reedSearch.target, exact: pv.reedSearch.exact,
-        note: LC().reedNote(pv.reedSearch, pv.params.reedDents),
-      },
+      reedPlan,
       fingerprint: pv.fingerprint,
       steps,
     };
@@ -512,12 +616,25 @@
         rows += `<tr><td>第 ${d.from + e} 根</td><td>综框 ${s + 1}</td></tr>`;
       }
     } else if (st.kind === 'dent') {
-      const walk = LC().dentWalk(d.to - d.from + 1, d.seq || [1]);
-      total = walk.length;
-      const n = Math.min(total, EXPAND_CAP);
-      for (let i = 0; i < n; i++) {
-        const w = walk[i];
-        rows += `<tr><td>第 ${w.dent} 筘</td><td>第 ${w.from}–${w.to} 根（${w.take} 根${w.full ? '' : '，末筘'}）</td></tr>`;
+      if (d.full) {
+        // 分区变筘：显式逐筘数组（含空筘），筘号 / 经线号为整幅编号
+        const walk = LC().dentWalkFull(d.seq || [], (d.from || 1) - 1, (d.dent0 || 1) - 1);
+        total = walk.length;
+        const n = Math.min(total, EXPAND_CAP);
+        for (let i = 0; i < n; i++) {
+          const w = walk[i];
+          rows += w.empty
+            ? `<tr><td>第 ${w.dent} 筘</td><td class="lo-dent-empty">空筘（0 根）</td></tr>`
+            : `<tr><td>第 ${w.dent} 筘</td><td>第 ${w.from}–${w.to} 根（${w.take} 根）</td></tr>`;
+        }
+      } else {
+        const walk = LC().dentWalk(d.to - d.from + 1, d.seq || [1]);
+        total = walk.length;
+        const n = Math.min(total, EXPAND_CAP);
+        for (let i = 0; i < n; i++) {
+          const w = walk[i];
+          rows += `<tr><td>第 ${w.dent} 筘</td><td>第 ${w.from}–${w.to} 根（${w.take} 根${w.full ? '' : '，末筘'}）</td></tr>`;
+        }
       }
     }
     const more = total > EXPAND_CAP ? `<tr><td colspan="2">…共 ${total} ${st.kind === 'dent' ? '筘' : '根'}，仅显示前 ${EXPAND_CAP} 行</td></tr>` : '';
@@ -558,6 +675,75 @@
     S.open = false;   // locateCell 会隐藏所有模态
     window.locateCell({ grid: 'threading', r: -1, c, c1 });
     toast(`已定位：第 ${from}–${to} 根（循环内第 ${c + 1}–${c1 + 1} 根）`);
+  }
+
+  /* ====================== 分区变筘编辑器接口 ========================== */
+  /**
+   * 分区编辑器上下文：快照 / 参数 / 推算 / 基线穿筘 / 已确认区段。
+   * 预览优先，其次已打开工艺单，否则用当前草稿与表单参数现场推算。
+   */
+  function reedContext() {
+    const cur = S.current, pv = S.preview;
+    let snapshot, params, plan;
+    if (pv) {
+      snapshot = pv.snapshot; params = pv.params; plan = pv.plan;
+    } else if (cur) {
+      snapshot = cur.snapshot;
+      params = LC().normalizeParams(cur.params);
+      plan = cur.derived;
+    } else {
+      snapshot = deepClone(window.__loom.state.draft);
+      params = readFormParams();
+      plan = LC().derivePlan(Engine(), snapshot, params);
+    }
+    // 基线穿筘（改动量对比 / 锁定区段固定序列来源）
+    let baselineDents = null, baselinePlan = null;
+    if (cur && cur.reedPlan) {
+      baselinePlan = cur.reedPlan;
+      baselineDents = cur.reedPlan.mode === 'zoned'
+        ? (cur.reedPlan.dents || []).slice()
+        : LC().uniformDents(plan.totalEnds, cur.reedPlan.seq || [2]);
+    } else if (pv && pv.reedSearch) {
+      baselineDents = LC().uniformDents(plan.totalEnds,
+        pv.reedSearch.plans[pv.reedSel].seq);
+    }
+    // 已确认区段（已冻结分区单中已确认的穿筘步骤 → 锁定）
+    const confirmed = [];
+    if (cur && cur.reedPlan && cur.reedPlan.mode === 'zoned') {
+      (cur.steps || []).forEach(st => {
+        if (st.kind === 'dent' && st.done && st.detail && st.detail.zone != null) {
+          confirmed.push(st.detail.zone);
+        }
+      });
+    }
+    return {
+      snapshot, params, plan, baselineDents, baselinePlan, confirmed,
+      sheetOpen: !!cur, sheetName: cur ? cur.name : null,
+    };
+  }
+
+  /**
+   * 采纳分区方案并另存工艺单版本：
+   * 确保有预览上下文（无则按当前草稿 / 已打开工艺单构建），写入分区方案后冻结。
+   */
+  async function adoptZonedPlan(z) {
+    if (!S.preview) {
+      if (S.current) {
+        const snapshot = deepClone(S.current.snapshot);
+        const params = LC().normalizeParams(S.current.params);
+        const plan = LC().derivePlan(Engine(), snapshot, params);
+        S.preview = {
+          snapshot, params, plan, reedSearch: null, reedSel: 0, zoned: null,
+          fingerprint: LC().fingerprint(snapshot, params),
+        };
+      } else {
+        calcPreview();
+      }
+    }
+    S.preview.zoned = z;
+    renderMiddle();
+    await freeze();
+    return !!S.current;
   }
 
   /* ============================== 删除 ================================ */
@@ -608,8 +794,43 @@
 
     // 穿筘方案 + 操作顺序
     const rp = cur.reedPlan || {};
-    let stepsHtml = `<div>穿筘方案：每筘 [${(rp.seq || []).join(' ')}] 循环 · 平均 ${fmt2(rp.avg || 0)} 根/筘` +
-      (rp.dents != null ? ` · 共 ${rp.dents} 筘` : '') + (rp.note ? `<br>⚠ ${escapeHtml(rp.note)}` : '') + '</div>';
+    const zoned = rp.mode === 'zoned';
+    let stepsHtml;
+    if (zoned) {
+      const zones = rp.zones || [];
+      const m = rp.metrics || [];
+      stepsHtml = `<div>穿筘方案：分区变筘 ${zones.length} 段 · 共 ${(rp.dents || []).length} 筘` +
+        ` · 空筘 ${rp.emptyDents != null ? rp.emptyDents : 0}` +
+        (rp.note ? `<br>⚠ ${escapeHtml(rp.note)}` : '') + '</div>';
+      // 区段明细表（打印稿标出分区边界、空筘与锁定区段）
+      let zt = `<table class="lo-print-table"><thead><tr>
+        <th>区段</th><th>经线范围</th><th>目标经密</th><th>实际经密</th><th>筘数</th>
+        <th>空筘</th><th>每筘上限</th><th>连续空筘上限</th><th>镜像</th><th>锁定</th>
+        </tr></thead><tbody>`;
+      zones.forEach((zo, i) => {
+        const mm = m[i] || {};
+        zt += `<tr><td>${i + 1}</td><td>${zo.from}–${zo.to}</td>` +
+          `<td>${fmt2(zo.targetDensity)}</td><td>${mm.density != null ? fmt2(mm.density) : '—'}</td>` +
+          `<td>${mm.dents != null ? mm.dents : '—'}</td><td>${mm.empty != null ? mm.empty : 0}</td>` +
+          `<td>${zo.maxPerDent}</td><td>${zo.maxEmptyRun}</td>` +
+          `<td>${zo.mirror ? '✓' : '—'}</td><td>${zo.locked ? '🔒 锁定' : '—'}</td></tr>`;
+      });
+      $('#loPrintZones').innerHTML = zt + '</tbody></table>';
+      $('#loPrintZonesTitle').classList.remove('hidden');
+      // 分区图（边界 / 空筘 / 锁定区段）
+      const cvs = $('#loPrintReed');
+      cvs.classList.remove('hidden');
+      if (window.__reedAPI && window.__reedAPI.drawPrintMap) {
+        window.__reedAPI.drawPrintMap(cvs, cur);
+      }
+    } else {
+      stepsHtml = `<div>穿筘方案：每筘 [${(rp.seq || []).join(' ')}] 循环 · 平均 ${fmt2(rp.avg || 0)} 根/筘` +
+        (rp.dents != null ? ` · 共 ${rp.dents} 筘` : '') +
+        (rp.note ? `<br>⚠ ${escapeHtml(rp.note)}` : '') + '</div>';
+      $('#loPrintZones').innerHTML = '';
+      $('#loPrintZonesTitle').classList.add('hidden');
+      $('#loPrintReed').classList.add('hidden');
+    }
     stepsHtml += '<div class="lo-print-steps">';
     (cur.steps || []).forEach((st, i) => {
       const mark = st.done ? '☑' : '☐';
@@ -660,7 +881,7 @@
       state: S,
       refreshList, openSheet, calcPreview, freeze, deleteSheet,
       toggleStep, locateStep, doPrint, readFormParams, fillForm,
-      previewSteps,
+      previewSteps, reedContext, adoptZonedPlan,
     };
     return true;
   }
