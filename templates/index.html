@@ -25,6 +25,7 @@
       <button id="btnReverse" class="btn" title="从目标组织反推穿综 / 联结 / 踩踏">🎯 目标反推</button>
       <button id="btnLoom" class="btn" title="从当前草稿冻结上机工艺单：整经根数 / 筘幅 / 经长 / 纬数 / 分色用纱量 / 穿筘方案与操作顺序">🧾 上机工艺单</button>
       <button id="btnDobby" class="btn" title="多臂织机升综计划：逐纬升综矩阵 / 设备限制校验 / 还原踏板方案 / 打印升综图">🎛 升综计划</button>
+      <button id="btnDouble" class="btn" title="双层织物校核：经纬分层 / 接结区 / 双幅敞开·单侧折叠·筒织 / 逐纬截面 / 梭线路径 / 修复候选">⇅ 双层校核</button>
       <button id="btnPrint" class="btn" title="生成打印图 (Ctrl+P)">🖨 打印图</button>
     </div>
   </header>
@@ -620,6 +621,119 @@
     </div>
   </div>
 
+  <!-- ============================= 双层织物校核 ============================= -->
+  <div id="doubleModal" class="modal hidden">
+    <div class="modal-card dl-card">
+      <div class="modal-head">
+        <h2>双层织物校核工作区</h2>
+        <button class="btn close" data-close-dl>&times;</button>
+      </div>
+      <div class="dl-layout">
+        <!-- 左：分层配置 / 结构 / 锁 / 问题 / 搜索 -->
+        <div class="dl-col dl-col-left">
+          <label class="check dl-enable"><input id="dlEnabled" type="checkbox" />
+            <b>启用双层校核</b>（配置随草稿保存到 SQLite；停用不影响单层组织图）</label>
+
+          <div class="dl-sub">① 经线 / 纬次分层（0 基序号；也可直接在右侧分层带点选）</div>
+          <div class="dl-row">
+            <label>起始经 <input id="dlWarpFrom" type="number" min="1" value="1" /></label>
+            <label>结束经 <input id="dlWarpTo" type="number" min="1" /></label>
+            <select id="dlWarpLayer" class="sh-mini">
+              <option value="0">上层经</option><option value="1">下层经</option>
+            </select>
+            <button id="dlWarpApply" class="btn tiny">分配</button>
+          </div>
+          <div class="dl-row">
+            <label>起始纬 <input id="dlPickFrom" type="number" min="1" value="1" /></label>
+            <label>结束纬 <input id="dlPickTo" type="number" min="1" /></label>
+            <select id="dlPickLayer" class="sh-mini">
+              <option value="0">上层纬</option><option value="1">下层纬</option>
+            </select>
+            <button id="dlPickApply" class="btn tiny">分配</button>
+          </div>
+          <div class="dl-row">
+            <button id="dlWarpSplit" class="btn tiny">经前后半分上下层</button>
+            <button id="dlPickAlt" class="btn tiny">纬奇偶交替</button>
+            <button id="dlPickSplit" class="btn tiny">纬前后半分</button>
+          </div>
+
+          <div class="dl-sub" style="margin-top:10px">② 织物结构与折边</div>
+          <div class="dl-row">
+            <label class="check"><input type="radio" name="dlStruct" value="open" /> 双幅敞开</label>
+            <label class="check"><input type="radio" name="dlStruct" value="fold" /> 单侧折叠</label>
+            <label class="check"><input type="radio" name="dlStruct" value="tube" /> 筒织</label>
+          </div>
+          <div class="dl-row" id="dlFoldSideRow">
+            折边方向
+            <label class="check"><input type="radio" name="dlFoldSide" value="L" /> 左边折回</label>
+            <label class="check"><input type="radio" name="dlFoldSide" value="R" /> 右边折回</label>
+            <span class="hint" id="dlFoldHint">筒织时两侧皆折，此选项不生效。</span>
+          </div>
+
+          <div class="dl-sub" style="margin-top:10px">③ 接结区与锁定（在右侧合并表面上操作）</div>
+          <div class="dl-row">
+            <label class="check"><input type="radio" name="dlPaint" value="zone" checked /> 圈接结区</label>
+            <label class="check"><input type="radio" name="dlPaint" value="lock" /> 锁定组织格</label>
+            <label class="check"><input type="radio" name="dlPaint" value="erase" /> 擦除</label>
+          </div>
+          <div class="dl-row">
+            <label class="check"><input id="dlLockThreading" type="checkbox" /> 锁定穿综（搜索不动穿综）</label>
+          </div>
+          <p class="hint" id="dlCounts">—</p>
+
+          <div class="dl-sub" style="margin-top:10px">④ 校核问题 <span id="dlIssueCount" class="badge">0</span></div>
+          <div id="dlIssueList" class="dl-issue-list"></div>
+
+          <div class="dl-sub" style="margin-top:10px">⑤ 修复候选（只改联结 / 踩踏 / 升综格）</div>
+          <div class="dl-row">
+            <button id="dlSearch" class="btn tiny btn-primary">搜索候选方案</button>
+            <button id="dlAdopt" class="btn tiny" disabled>采纳为新草稿（另存）</button>
+          </div>
+          <div id="dlCandList" class="dl-cand-list">
+            <p class="hint">候选按 错误数 → 改动格数 → 最长浮线 排列；选中后在合并表面叠色标出差异。</p>
+          </div>
+        </div>
+
+        <!-- 右：四个工作画布 -->
+        <div class="dl-col dl-col-right">
+          <div class="dl-views">
+            <div class="dl-view">
+              <div class="dl-view-head">上层组织 <span id="dlTopInfo" class="dl-view-info"></span></div>
+              <div class="dl-canvas-wrap" id="dlTopWrap"><canvas id="dlTopCanvas"></canvas></div>
+            </div>
+            <div class="dl-view">
+              <div class="dl-view-head">下层组织 <span id="dlBottomInfo" class="dl-view-info"></span></div>
+              <div class="dl-canvas-wrap" id="dlBottomWrap"><canvas id="dlBottomCanvas"></canvas></div>
+            </div>
+            <div class="dl-view dl-view-wide">
+              <div class="dl-view-head">合并表面（点格追溯经线 / 纬次 / 综框 / 升综；在本区圈接结区与锁定格）
+                <span id="dlMergedInfo" class="dl-view-info"></span></div>
+              <div class="dl-canvas-wrap dl-merged-wrap" id="dlMergedWrap">
+                <canvas id="dlMergedBase"></canvas>
+                <canvas id="dlMergedOv"></canvas>
+              </div>
+            </div>
+            <div class="dl-view dl-view-wide">
+              <div class="dl-view-head">逐纬截面（梭线在两层之间的路径）</div>
+              <div class="dl-section-bar">
+                <button id="dlPlay" class="btn tiny">▶ 播放</button>
+                <button id="dlPrev" class="btn tiny">‹</button>
+                <button id="dlNext" class="btn tiny">›</button>
+                <label class="hint">速度 <input id="dlSpeed" type="range" min="1" max="10" value="3" /></label>
+                <span id="dlPlayInfo" class="dl-play-info">—</span>
+              </div>
+              <div class="dl-canvas-wrap" id="dlSectionWrap"><canvas id="dlSectionCanvas"></canvas></div>
+            </div>
+          </div>
+          <div class="dl-footer">
+            <span id="dlHoverInfo" class="dl-hover-info">—</span>
+            <button id="dlPrint" class="btn tiny">🖨 打印双层校核图</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ============================= Toast ============================= -->
   <div id="toast" class="toast hidden"></div>
 
@@ -660,16 +774,27 @@
     <div id="dbPrintLegend" class="print-legend db-print-cols"></div>
   </section>
 
+  <!-- ============================= 双层校核打印区 ============================= -->
+  <section id="dlPrintSheet" class="print-sheet">
+    <h1 id="dlPrintTitle"></h1>
+    <div id="dlPrintMeta" class="print-meta"></div>
+    <canvas id="dlPrintCanvas"></canvas>
+    <h2 class="print-h2">分层 / 接结 / 校核问题</h2>
+    <div id="dlPrintLegend" class="print-legend dl-print-cols"></div>
+  </section>
+
   <script src="/static/engine.js"></script>
   <script src="/static/defect-core.js"></script>
   <script src="/static/loom-core.js"></script>
   <script src="/static/dobby-core.js"></script>
+  <script src="/static/double-core.js"></script>
   <script src="/static/reverse.js"></script>
   <script src="/static/reverse-ui.js"></script>
   <script src="/static/shuttle-ui.js"></script>
   <script src="/static/defect-ui.js"></script>
   <script src="/static/loom-ui.js"></script>
   <script src="/static/dobby-ui.js"></script>
+  <script src="/static/double-ui.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

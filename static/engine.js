@@ -28,6 +28,16 @@
  *       maxSwitch: int,               相邻两纬允许改变状态的综框数
  *       cells: [picks][shafts]        布尔，cells[p][s]=1 表示第 p 纬综框 s 升起
  *     }
+ *   double:    双层织物校核配置（可缺省，旧草稿没有该字段；默认停用，不影响单层推导）
+ *     {
+ *       enabled: bool,                是否启用双层校核工作区
+ *       warpLayer: [ends]             0=上层经 | 1=下层经
+ *       pickLayer: [picks]            0=上层纬 | 1=下层纬
+ *       zones: [[r,c,r1,c1]...]       允许接结区（组织图矩形，闭区间，0 基）
+ *       structure: 'open'|'fold'|'tube'   双幅敞开 / 单侧折叠 / 筒织
+ *       foldSide: 'L'|'R'             折边方向（fold 时生效；tube 两侧皆折）
+ *       lockedCells: [[r,c]...]       指定锁定的组织格（搜索不得改动该格交织）
+ *     }
  * }
  *
  * drawdown[p][e]：1=经线在上（正面见经色），0=纬线在上（正面见纬色），
@@ -66,6 +76,7 @@ const Engine = (() => {
       palette: PALETTE.map(c => ({ ...c })),
       shuttles: defaultShuttles(picks),
       dobby: defaultDobby(picks, shafts),
+      double: defaultDouble(ends, picks),
     };
   }
 
@@ -80,6 +91,7 @@ const Engine = (() => {
       palette: PALETTE.map(c => ({ ...c })),
       shuttles: defaultShuttles(picks),
       dobby: defaultDobby(picks, shafts),
+      double: defaultDouble(ends, picks),
     };
   }
 
@@ -157,6 +169,88 @@ const Engine = (() => {
     return { enabled: !!(db && db.enabled), deviceShafts, maxLift, maxSwitch, cells };
   }
 
+  /* ------------------------------------------------------------------ *
+   * 双层织物校核：数据规整
+   *
+   * 分层 / 接结区 / 锁定格均随草稿持久化；默认停用。
+   * 旧草稿没有 double 字段时传入 null，得到一份“未启用”的默认配置，
+   * 打开双层工作区即可直接使用，不影响任何单层推导。
+   * ------------------------------------------------------------------ */
+  /** 默认双层配置：未启用；上/下层按经纬序号均分（前半上、后半下）。 */
+  function defaultDouble(ends, picks) {
+    return normalizeDouble(null, ends, picks);
+  }
+
+  /**
+   * 把（可能缺失/残缺的）双层配置规整为完整结构：
+   *  - warpLayer/pickLayer 长度恒为 ends/picks，取值 0（上）|1（下）；
+   *  - zones 为去重、钳制到组织图范围内的整数矩形 [r,c,r1,c1]（0 基闭区间）；
+   *  - lockedCells 为范围内去重的 [r,c] 格点；
+   *  - structure/foldSide 枚举兜底；enabled 恒为布尔。
+   */
+  function normalizeDouble(dl, ends, picks) {
+    const E = Math.max(0, ends | 0), P = Math.max(0, picks | 0);
+    const layerOf = (v, half) => v === 1 ? (half ? 1 : 0) : 0;
+    // 默认均分：前半上、后半下（旧草稿“直接打开”也能立刻看到两层）
+    const warpLayer = [], pickLayer = [];
+    for (let e = 0; e < E; e++) {
+      const v = dl && dl.warpLayer && dl.warpLayer[e];
+      warpLayer[e] = (v === 1 || v === 0) ? v : (e >= E / 2 ? 1 : 0);
+    }
+    for (let p = 0; p < P; p++) {
+      const v = dl && dl.pickLayer && dl.pickLayer[p];
+      pickLayer[p] = (v === 1 || v === 0) ? v : (p >= P / 2 ? 1 : 0);
+    }
+    const structure = (dl && (dl.structure === 'fold' || dl.structure === 'tube'))
+      ? dl.structure : 'open';
+    const foldSide = (dl && dl.foldSide === 'R') ? 'R' : 'L';
+
+    const inRect = (q) => Array.isArray(q) && q.length === 4 &&
+      q.every(n => Number.isInteger(n));
+    const zoneSet = new Set(), zones = [];
+    if (dl && Array.isArray(dl.zones)) {
+      for (const z of dl.zones) {
+        if (!inRect(z)) continue;
+        let r0 = clampInt(z[0], 0, Math.max(0, P - 1), 0);
+        let r1 = clampInt(z[2], 0, Math.max(0, P - 1), 0);
+        let c0 = clampInt(z[1], 0, Math.max(0, E - 1), 0);
+        let c1 = clampInt(z[3], 0, Math.max(0, E - 1), 0);
+        if (r0 > r1) [r0, r1] = [r1, r0];
+        if (c0 > c1) [c0, c1] = [c1, c0];
+        const key = `${r0},${c0},${r1},${c1}`;
+        if (zoneSet.has(key)) continue;
+        zoneSet.add(key);
+        zones.push([r0, c0, r1, c1]);
+      }
+    }
+    const lockSet = new Set(), lockedCells = [];
+    if (dl && Array.isArray(dl.lockedCells)) {
+      for (const q of dl.lockedCells) {
+        if (!Array.isArray(q) || q.length < 2) continue;
+        const r = clampInt(q[0], 0, Math.max(0, P - 1), -1);
+        const c = clampInt(q[1], 0, Math.max(0, E - 1), -1);
+        if (r < 0 || c < 0) continue;
+        const key = `${r},${c}`;
+        if (lockSet.has(key)) continue;
+        lockSet.add(key);
+        lockedCells.push([r, c]);
+      }
+    }
+    lockedCells.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    return {
+      enabled: !!(dl && dl.enabled),
+      warpLayer, pickLayer, zones,
+      structure, foldSide, lockedCells,
+    };
+  }
+
+  /** 双层接结区命中：格 (p,e) 是否落在任一允许接结矩形内。 */
+  function inStitchZone(dl, p, e) {
+    if (!dl || !Array.isArray(dl.zones)) return false;
+    return dl.zones.some(([r0, c0, r1, c1]) =>
+      p >= r0 && p <= r1 && e >= c0 && e <= c1);
+  }
+
   function cloneDraft(d) {
     return {
       ...d,
@@ -177,6 +271,13 @@ const Engine = (() => {
         ...d.dobby,
         cells: d.dobby.cells.map(row => row.slice()),
       } : d.dobby,
+      double: d.double ? {
+        ...d.double,
+        warpLayer: d.double.warpLayer.slice(),
+        pickLayer: d.double.pickLayer.slice(),
+        zones: d.double.zones.map(z => z.slice()),
+        lockedCells: d.double.lockedCells.map(q => q.slice()),
+      } : d.double,
     };
   }
 
@@ -199,6 +300,9 @@ const Engine = (() => {
           (p < old.p && s < old.s && d.dobby.cells[p]) ? !!d.dobby.cells[p][s] : false)
       );
     }
+
+    // 双层配置按新尺寸规整：分层带保留旧序号、新增部分给默认层；接结区 / 锁定格越界钳制
+    nd.double = normalizeDouble(d.double, ends, picks);
 
     nd.tieup = Array.from({ length: shafts }, (_, s) =>
       Array.from({ length: treadles }, (_, t) =>
@@ -827,6 +931,7 @@ const Engine = (() => {
     period1D, gcd, lcm,
     defaultShuttles, normalizeShuttles, shuttlePath, shuttleSuggest,
     defaultDobby, normalizeDobby,
+    defaultDouble, normalizeDouble, inStitchZone,
   };
 })();
 

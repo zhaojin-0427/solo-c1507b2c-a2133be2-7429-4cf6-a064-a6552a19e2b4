@@ -1109,6 +1109,7 @@ function afterEdit() {
   refreshCompareIfActive();
   if (window.__shuttleRefresh) window.__shuttleRefresh();
   if (window.__dobbyRefresh) window.__dobbyRefresh();
+  if (window.__dlRefresh) window.__dlRefresh();
   scheduleAutosave();
 }
 
@@ -1124,6 +1125,7 @@ function afterStructural() {
   refreshCompareIfActive();
   if (window.__shuttleRefresh) window.__shuttleRefresh();
   if (window.__dobbyRefresh) window.__dobbyRefresh();
+  if (window.__dlRefresh) window.__dlRefresh();
   scheduleAutosave();
 }
 
@@ -1707,6 +1709,8 @@ function normalizeDraft(d) {
   merged.shuttles = Engine.normalizeShuttles(d.shuttles, merged.picks);
   // 升综计划按草稿实际纬数 × 综框数规整；旧草稿缺该字段时补“未启用”的默认矩阵
   merged.dobby = Engine.normalizeDobby(d.dobby, merged.picks, merged.shafts);
+  // 双层配置按草稿实际经纬数规整；旧草稿缺该字段时补“未启用”的默认分层（可直接打开）
+  merged.double = Engine.normalizeDouble(d.double, merged.ends, merged.picks);
   return merged;
 }
 

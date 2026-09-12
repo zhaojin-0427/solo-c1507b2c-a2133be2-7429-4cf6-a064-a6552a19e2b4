@@ -920,3 +920,87 @@ tr.sh-locked .drag-handle { cursor: not-allowed; opacity: .4; }
 .db-print-row { break-inside: avoid; font-size: 10.5px; line-height: 1.7; }
 .db-print-row.warn { color: #b3352a; }
 .db-print-warn { font-size: 9.5px; }
+
+/* =====================================================================
+   双层织物校核工作区
+   ===================================================================== */
+.dl-card {
+  width: min(1280px, 97vw);
+  max-height: 94vh;
+  padding: 14px 18px;
+}
+.dl-layout { display: grid; grid-template-columns: 360px 1fr; gap: 14px; }
+.dl-col { min-width: 0; }
+.dl-col-left { max-height: 84vh; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 2px; }
+.dl-col-right { display: flex; flex-direction: column; min-height: 0; max-height: 84vh; }
+.dl-enable { display: block; padding: 6px 8px; margin-bottom: 8px;
+  background: #eef2f7; border: 1px solid #b9c4d6; border-radius: 6px; font-size: 12.5px; }
+.dl-sub { font-size: 13px; font-weight: 600; margin: 8px 0 6px; }
+.dl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.dl-row label { font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; }
+.dl-row input[type="number"] { width: 56px; padding: 3px 6px; }
+#dlFoldSideRow { padding-left: 8px; }
+#dlFoldSideRow.dl-dim { opacity: .55; }
+
+.dl-issue-list {
+  max-height: 22vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; padding: 6px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.dl-issue {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12px; line-height: 1.5; color: var(--bad);
+}
+.dl-issue.warn { color: var(--warn); }
+.dl-issue .btn { flex: 0 0 auto; padding: 1px 8px; font-size: 11px; }
+.dl-good { color: var(--ok); }
+
+.dl-cand-list {
+  max-height: 20vh; overflow-y: auto; margin-top: 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  padding: 6px 8px; display: flex; flex-direction: column; gap: 3px;
+}
+.dl-cand { display: flex; align-items: center; gap: 7px; font-size: 12px;
+  padding: 3px 4px; border-radius: 4px; cursor: pointer; border-bottom: 1px dashed var(--grid); }
+.dl-cand.sel { background: #f0e8f7; }
+.dl-cand.base { opacity: .7; }
+.dl-cand-txt { line-height: 1.4; }
+
+/* 右侧四视图 */
+.dl-views { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; overflow-y: auto; padding-right: 2px; }
+.dl-view {
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  padding: 6px 8px; display: flex; flex-direction: column; min-width: 0;
+}
+.dl-view-wide { grid-column: 1 / -1; }
+.dl-view-head { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 4px; }
+.dl-view-info { font-weight: 400; margin-left: 8px; color: #9a917e; }
+.dl-canvas-wrap {
+  position: relative; overflow: auto; background: #fffdf7;
+  border: 1px solid var(--grid); border-radius: 4px; min-height: 120px;
+}
+#dlTopWrap, #dlBottomWrap { max-height: 24vh; }
+.dl-merged-wrap { max-height: 40vh; }
+.dl-canvas-wrap canvas { display: block; }
+#dlMergedBase { cursor: crosshair; }
+
+.dl-section-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+.dl-play-info { font-size: 11.5px; color: var(--ink-soft); }
+.dl-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line);
+}
+.dl-hover-info { font-size: 11.5px; color: var(--ink-soft); flex: 1; min-width: 0; }
+
+/* 双层打印 */
+.dl-print-cols { columns: 2; }
+
+@media print {
+  body.dl-printing header, body.dl-printing .app,
+  body.dl-printing #printSheet, body.dl-printing #dfPrintSheet,
+  body.dl-printing #loPrintSheet, body.dl-printing #dbPrintSheet,
+  body.dl-printing .modal { display: none !important; }
+  body:not(.dl-printing) #dlPrintSheet { display: none; }
+  body.dl-printing #dlPrintSheet { display: block; }
+}
